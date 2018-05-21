@@ -47,19 +47,25 @@ SELECT HUID(`uuid`), country_fr FROM bhima.country
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.country.`uuid`), name = bhima.country.country_fr;
 
 /* PROVINCE */
+ALTER TABLE `province` DROP KEY `province_1`;
 INSERT INTO province (`uuid`, name, country_uuid) 
 SELECT HUID(`uuid`), name, HUID(country_uuid) FROM bhima.province
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.province.`uuid`), name = bhima.province.name;
+ALTER TABLE `province` ADD CONSTRAINT `province_1` UNIQUE (name, country_uuid);
 
 /* SECTOR */
+ALTER TABLE `sector` DROP KEY `sector_1`;
 INSERT INTO sector (`uuid`, name, province_uuid) 
 SELECT HUID(`uuid`), name, HUID(province_uuid) FROM bhima.sector
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.sector.`uuid`), name = bhima.sector.name;
+ALTER TABLE `sector` ADD CONSTRAINT `sector_1` UNIQUE (name, province_uuid);
 
 /* VILLAGE */
+ALTER TABLE `village` DROP KEY `village_1`;
 INSERT INTO village (`uuid`, name, sector_uuid) 
 SELECT HUID(`uuid`), name, HUID(sector_uuid) FROM bhima.village
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.village.`uuid`), name = bhima.village.name;
+ALTER TABLE `village` ADD CONSTRAINT `village_1` UNIQUE (name, sector_uuid);
 
 /* ENTERPRISE  */
 INSERT INTO enterprise (id, name, abbr, phone, email, location_id, logo, currency_id, po_box, gain_account_id, loss_account_id)
