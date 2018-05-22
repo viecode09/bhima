@@ -118,6 +118,10 @@ INSERT INTO role_unit
 INSERT INTO role_actions
   SELECT HUID(uuid()) as uuid, @roleUuid, id FROM actions;
 
+/* action role */
+INSERT INTO role_actions
+SELECT HUID(uuid()) as uuid, @roleUuid, id FROM actions;
+
 /* user role */
 INSERT INTO `user_role`(`uuid`, user_id, role_uuid)
 VALUES(HUID(uuid()), @SUPERUSER_ID, @roleUuid);
