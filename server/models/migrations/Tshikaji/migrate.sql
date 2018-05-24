@@ -48,21 +48,21 @@ ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.country.`uuid`), name = bhima.countr
 
 /* PROVINCE */
 ALTER TABLE `province` DROP KEY `province_1`;
-INSERT INTO province (`uuid`, name, country_uuid) 
+INSERT INTO province (`uuid`, name, country_uuid)
 SELECT HUID(`uuid`), name, HUID(country_uuid) FROM bhima.province
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.province.`uuid`), name = bhima.province.name;
 ALTER TABLE `province` ADD CONSTRAINT `province_1` UNIQUE (name, country_uuid);
 
 /* SECTOR */
 ALTER TABLE `sector` DROP KEY `sector_1`;
-INSERT INTO sector (`uuid`, name, province_uuid) 
+INSERT INTO sector (`uuid`, name, province_uuid)
 SELECT HUID(`uuid`), name, HUID(province_uuid) FROM bhima.sector
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.sector.`uuid`), name = bhima.sector.name;
 ALTER TABLE `sector` ADD CONSTRAINT `sector_1` UNIQUE (name, province_uuid);
 
 /* VILLAGE */
 ALTER TABLE `village` DROP KEY `village_1`;
-INSERT INTO village (`uuid`, name, sector_uuid) 
+INSERT INTO village (`uuid`, name, sector_uuid)
 SELECT HUID(`uuid`), name, HUID(sector_uuid) FROM bhima.village
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.village.`uuid`), name = bhima.village.name;
 ALTER TABLE `village` ADD CONSTRAINT `village_1` UNIQUE (name, sector_uuid);
@@ -73,17 +73,14 @@ SELECT id, name, abbr, phone, email, HUID(location_id), logo, currency_id, po_bo
 ON DUPLICATE KEY UPDATE id = bhima.enterprise.id, name = bhima.enterprise.name, abbr = bhima.enterprise.abbr, phone = bhima.enterprise.phone, email = bhima.enterprise.email, location_id = HUID(bhima.enterprise.location_id), logo = bhima.enterprise.logo, currency_id = bhima.enterprise.currency_id, po_box = bhima.enterprise.po_box;
 
 /* PROJECT */
-INSERT INTO project (id, name, abbr, enterprise_id, zs_id, locked) 
+INSERT INTO project (id, name, abbr, enterprise_id, zs_id, locked)
 SELECT id, name, abbr, enterprise_id, zs_id, 0 FROM bhima.project
 ON DUPLICATE KEY UPDATE id = bhima.project.id;
 
 /* USER */
-/*
-  FIX: THE LAST LOGIN BY CONVERTING CORRECTLY date INTO timestamp
-*/
 ALTER TABLE `user` DROP KEY `user_1`;
-INSERT INTO `user` (id, username, password, display_name, email, active, deactivated, pin, last_login) 
-SELECT id, username, password, CONCAT(first, ' ', last), email, active, 0, pin, CURRENT_TIMESTAMP() FROM bhima.`user`
+INSERT INTO `user` (id, username, password, display_name, email, active, deactivated, pin, last_login)
+SELECT id, username, password, CONCAT(first, ' ', last), email, active, 0, pin, IF(TIMESTAMP(last_login), TIMESTAMP(last_login), NOW()) FROM bhima.`user`
 ON DUPLICATE KEY UPDATE id = bhima.`user`.id;
 ALTER TABLE `user` ADD CONSTRAINT `user_1` UNIQUE (username);
 
@@ -120,7 +117,7 @@ INSERT INTO role_actions
 
 /* action role */
 INSERT INTO role_actions
-SELECT HUID(uuid()) as uuid, @roleUuid, id FROM actions;
+  SELECT HUID(uuid()) as uuid, @roleUuid, id FROM actions;
 
 /* user role */
 INSERT INTO `user_role`(`uuid`, user_id, role_uuid)
