@@ -311,7 +311,7 @@ ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.debitor_group.`uuid`);
   THERE IS DEBTOR WHO BELONGS TO A GROUP WHICH DOESN'T HAVE AN EXISTING ACCOUNT ID
 */
 INSERT INTO debtor (`uuid`, group_uuid, `text`)
-SELECT HUID(`uuid`), HUID(group_uuid), SUBSTRING(`text`, 0, 99) FROM bhima.debitor WHERE bhima.debitor.uuid NOT IN (
+SELECT HUID(`uuid`), HUID(group_uuid), SUBSTRING(`text`, 1, 100) FROM bhima.debitor WHERE bhima.debitor.uuid NOT IN (
   SELECT d.uuid FROM bhima.debitor d JOIN bhima.debitor_group dg ON dg.uuid = d.group_uuid WHERE dg.account_id IN (210, 257, 1074))
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.debitor.`uuid`);
 
@@ -322,7 +322,7 @@ ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.creditor_group.`uuid`);
 
 /* CREDITOR */
 INSERT INTO creditor (`uuid`, group_uuid, `text`)
-SELECT HUID(`uuid`), HUID(group_uuid), SUBSTRING(`text`, 0, 99) FROM bhima.creditor
+SELECT HUID(`uuid`), HUID(group_uuid), SUBSTRING(`text`, 1, 100) FROM bhima.creditor
 ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.creditor.`uuid`);
 
 /* SERVICE */
