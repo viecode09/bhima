@@ -237,9 +237,11 @@ INSERT INTO reference (id, is_report, ref, `text`, `position`, `reference_group_
 ON DUPLICATE KEY UPDATE id = bhima.reference.id;
 
 /* ACCOUNT */
+ALTER TABLE account DROP INDEX `account_1`;
 INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked, cc_id, pc_id, created, classe, reference_id)
   SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, locked, cc_id, pc_id, created, classe, reference_id FROM bhima.account
 ON DUPLICATE KEY UPDATE id = bhima.account.id;
+ALTER TABLE account ADD UNIQUE KEY `account_1` (`number`);
 
 CREATE TEMPORARY TABLE `inventory_group_dups` AS
   SELECT COUNT(code) as N, code FROM bhima.inventory_group GROUP BY code HAVING COUNT(code) > 1;
@@ -359,10 +361,12 @@ ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.sale.`uuid`); */
   SELECT JUST invoice_item for invoice who exist
   THIS QUERY TAKE TOO LONG TIME
 */
+/*!40000 ALTER TABLE `invoice_item` DISABLE KEYS */;
 INSERT INTO invoice_item (invoice_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit)
 SELECT HUID(sale_uuid), HUID(`uuid`), HUID(inventory_uuid), quantity, inventory_price, transaction_price, debit, credit FROM bhima.sale_item WHERE HUID(bhima.sale_item.sale_uuid) IN (
   SELECT uuid from sale_record_map
 ) ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.sale_item.`uuid`);
+/*!40000 ALTER TABLE `invoice_item` ENABLE KEYS */;
 
 COMMIT;
 
@@ -467,6 +471,51 @@ UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id 
 UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
 
 COMMIT;
+
+/* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
+/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
+/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
+CREATE TEMPORARY TABLE combined_ledger AS SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
+  SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
+  UNION ALL
+  SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
+) as combined;
+/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
+/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
+
+/* INDEX IN COMBINED */
+ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
+
+/* VOUCHER */
+INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
+SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, HUID(pci.document_uuid), 0 FROM bhima.primary_cash pc
+  JOIN bhima.primary_cash_item pci ON pci.primary_cash_uuid = pc.uuid
+ON DUPLICATE KEY UPDATE `uuid` = HUID(pc.`uuid`);
+
+/* TEMPORARY VOUCHER ITEMS JOINED TO COMBINED LEDGER */
+CREATE TEMPORARY TABLE temp_voucher_item AS SELECT HUID(pci.`uuid`) as `uuid`, cl.account_id, cl.debit, cl.credit, HUID(pci.primary_cash_uuid) AS voucher_uuid, HUID(pci.document_uuid) AS document_uuid, HUID(cl.deb_cred_uuid) AS deb_cred_uuid 
+  FROM bhima.primary_cash_item pci
+  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid;
+
+/* INDEX IN TEMP VOUCHER ITEM */
+ALTER TABLE temp_voucher_item ADD INDEX `uuid` (`uuid`);
+
+/* REMOVE DUPLICATED UUID BY SETTING UP NEW UUID FOR EACH ROW */
+UPDATE temp_voucher_item SET `uuid` = HUID(UUID()) WHERE `uuid` IS NOT NULL;
+
+/* VOUCHER ITEM */
+/* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
+INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
+
+COMMIT;
+
+CREATE TEMPORARY TABLE `pcash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
+INSERT INTO `pcash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
+
+UPDATE general_ledger gl JOIN pcash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
+UPDATE posting_journal pj JOIN pcash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
+
 
 /* ENABLE AUTOCOMMIT AFTER THE SCRIPT */
 SET autocommit=1;
