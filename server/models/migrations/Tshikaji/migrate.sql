@@ -621,9 +621,36 @@ COMMIT;
 
 /*
 Hack hack hack
+
+This corrects values that were not updated for some reason in their reports :/
 */
 UPDATE general_ledger gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
 UPDATE posting_journal gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
+
+COMMIT;
+
+/*
+Update Journal + GL make cash payments reference invoices
+*/
+
+CREATE TEMPORARY TABLE invoice_links AS
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+INSERT INTO invoice_links
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+
+DROP TABLE invoice_links;
+
+COMMIT;
 
 /* ENABLE AUTOCOMMIT AFTER THE SCRIPT */
 SET autocommit=1;
