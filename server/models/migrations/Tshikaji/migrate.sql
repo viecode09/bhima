@@ -154,9 +154,14 @@ SELECT id, name, abbr, enterprise_id, zs_id, 0 FROM bhima.project
 ON DUPLICATE KEY UPDATE id = bhima.project.id;
 
 /* USER */
+ALTER TABLE `user` DROP KEY UNIQUE KEY `user_1`;
 INSERT INTO `user` (id, username, password, display_name, email, active, deactivated, pin, last_login)
   SELECT id, username, password, CONCAT(first, ' ', last), email, active, 0, pin, IF(TIMESTAMP(last_login), TIMESTAMP(last_login), NOW()) FROM bhima.`user`
 ON DUPLICATE KEY UPDATE id = bhima.`user`.id;
+
+/* UPDATE DUPLICATED USERNAME */
+UPDATE TABLE `user` SET `username` = 'jean_sekundo' WHERE id = 18;
+ALTER TABLE `user` ADD KEY UNIQUE KEY `user_1` (`username`);
 
 /*
   CREATE THE SUPERUSER for attributing permissions
@@ -571,23 +576,23 @@ COMMIT;
 /* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
 /*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
-CREATE TEMPORARY TABLE combined_ledger AS SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
-  SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
+CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
+  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
   UNION ALL
-  SELECT account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
+  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
 ) as combined;
 /*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
 
 /* INDEX IN COMBINED */
+ALTER TABLE combined_ledger ADD INDEX `uuid` (`uuid`);
 ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
 
 /* VOUCHER */
 INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
-SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, HUID(pci.document_uuid), 0 FROM bhima.primary_cash pc
-  JOIN bhima.primary_cash_item pci ON pci.primary_cash_uuid = pc.uuid
+SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0 FROM bhima.primary_cash pc
 ON DUPLICATE KEY UPDATE `uuid` = HUID(pc.`uuid`);
-
+ 
 /* FIX UNKNOWN USERS */
 UPDATE voucher SET user_id = @JOHN_DOE WHERE user_id NOT IN (SELECT u.id FROM user u);
 
@@ -596,7 +601,8 @@ CREATE TEMPORARY TABLE temp_voucher_item AS
   SELECT HUID(pci.`uuid`) AS `uuid`, cl.account_id, cl.debit, cl.credit, HUID(pci.primary_cash_uuid) AS voucher_uuid, HUID(pci.document_uuid) AS document_uuid, HUID(pc.deb_cred_uuid) AS deb_cred_uuid
   FROM bhima.primary_cash_item pci
   JOIN bhima.primary_cash pc ON pc.uuid = pci.primary_cash_uuid
-  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid;
+  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid
+  GROUP BY cl.uuid;
 
 /* INDEX IN TEMP VOUCHER ITEM */
 ALTER TABLE temp_voucher_item ADD INDEX `uuid` (`uuid`);
