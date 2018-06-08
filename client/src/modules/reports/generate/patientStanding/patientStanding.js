@@ -1,35 +1,25 @@
 angular.module('bhima.controllers')
-  .controller('aged_debtorsController', AgedDebtorsConfigController);
+  .controller('patientStandingController', PatientStandingController);
 
-AgedDebtorsConfigController.$inject = [
-  '$sce', 'NotifyService', 'BaseReportService', 'AppCache', 'reportData', '$state',
+PatientStandingController.$inject = [
+  '$state', '$sce', 'NotifyService', 'BaseReportService', 'AppCache',
+  'BaseReportService', 'reportData',
 ];
 
-function AgedDebtorsConfigController($sce, Notify, SavedReports, AppCache, reportData, $state) {
-  const vm = this;
-  const cache = new AppCache('configure_aged_debtors');
-  const reportUrl = 'reports/finance/debtors/aged';
+/**
+ * @function PatientStandingController
+ *
+ * @description
+ */
+function PatientStandingController($state, $sce, Notify, BaseReportService, AppCache, SavedReports, reportData) {
 
-  vm.previewGenerated = false;
+  const vm = this;
+  const cache = new AppCache('configure_patientStanding');
+  let reportUrl = '/reports/finance/financialPatient/';
+
   vm.reportDetails = {};
 
   checkCachedConfiguration();
-
-  vm.clearPreview = function clearPreview() {
-    vm.previewGenerated = false;
-    vm.previewResult = null;
-  };
-
-  vm.onSelectFiscalYear = (fiscalYear) => {
-    vm.reportDetails.fiscal_id = fiscalYear.id;
-  };
-
-  vm.onSelectPeriod = (period) => {
-    if (!period) {
-      return;
-    }
-    vm.reportDetails.period_id = period.id;
-  };
 
   vm.requestSaveAs = function requestSaveAs() {
     const options = {
@@ -45,6 +35,11 @@ function AgedDebtorsConfigController($sce, Notify, SavedReports, AppCache, repor
       .catch(Notify.handleError);
   };
 
+  // set patient
+  vm.setPatient = function setPatient(patient) {
+    reportUrl = reportUrl.concat(patient.uuid);
+  };
+
   vm.preview = function preview(form) {
     if (form.$invalid) { return 0; }
 
@@ -52,11 +47,16 @@ function AgedDebtorsConfigController($sce, Notify, SavedReports, AppCache, repor
     cache.reportDetails = angular.copy(vm.reportDetails);
 
     return SavedReports.requestPreview(reportUrl, reportData.id, angular.copy(vm.reportDetails))
-      .then((result) => {
+      .then(result => {
         vm.previewGenerated = true;
         vm.previewResult = $sce.trustAsHtml(result);
       })
       .catch(Notify.handleError);
+  };
+
+  vm.clearPreview = function clearPreview() {
+    vm.previewGenerated = false;
+    vm.previewResult = null;
   };
 
   function checkCachedConfiguration() {
