@@ -544,8 +544,10 @@ ON DUPLICATE KEY UPDATE id = bhima.cash_box_account_currency.id;
 COMMIT;
 
 -- filter for the cash table
+/*
 CREATE TEMPORARY TABLE deb_cred_filter AS
   SELECT d.uuid FROM bhima.debitor d JOIN bhima.debitor_group dg ON dg.uuid = d.group_uuid WHERE dg.account_id IN (210, 257, 1074);
+*/
 
 /* CASH */
 /*
@@ -553,23 +555,55 @@ CREATE TEMPORARY TABLE deb_cred_filter AS
   with as cash uuid 524475fb-9762-4051-960c-e5796a14d300
 */
 INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
-SELECT HUID(bhima.cash.`uuid`), bhima.cash.project_id, bhima.cash.reference, bhima.cash.`date`, HUID(bhima.cash.deb_cred_uuid), bhima.cash.currency_id, bhima.cash.cost, bhima.cash.user_id, bhima.cash.cashbox_id, bhima.cash.description, bhima.cash.is_caution, IF(bhima.cash_discard.`uuid` <> NULL, 1, 0), 0, CURRENT_TIMESTAMP() FROM bhima.cash LEFT JOIN bhima.cash_discard ON bhima.cash_discard.cash_uuid = bhima.cash.`uuid`
-WHERE bhima.cash.deb_cred_uuid NOT IN (SELECT uuid FROM deb_cred_filter) AND bhima.cash.uuid <> '524475fb-9762-4051-960c-e5796a14d30'
-ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.cash.`uuid`);
+SELECT HUID(bhima.cash.`uuid`), bhima.cash.project_id, bhima.cash.reference, bhima.cash.`date`, HUID(bhima.cash.deb_cred_uuid), bhima.cash.currency_id, bhima.cash.cost, bhima.cash.user_id, bhima.cash.cashbox_id, bhima.cash.description, bhima.cash.is_caution, IF(bhima.cash_discard.`uuid` <> NULL, 1, 0), 0, CURRENT_TIMESTAMP()
+FROM bhima.cash LEFT JOIN bhima.cash_discard ON bhima.cash_discard.cash_uuid = bhima.cash.`uuid`;
+/*WHERE bhima.cash.deb_cred_uuid NOT IN (SELECT uuid FROM deb_cred_filter)*/
 
 /* CASH ITEM */
 /*
   skipped cash 524475fb-9762-4051-960c-e5796a14d30
 */
 INSERT INTO cash_item (`uuid`, cash_uuid, amount, invoice_uuid)
-  SELECT HUID(`uuid`), HUID(cash_uuid), allocated_cost, HUID(invoice_uuid) FROM bhima.cash_item WHERE bhima.cash_item.cash_uuid <> '524475fb-9762-4051-960c-e5796a14d30'
-ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.cash_item.`uuid`);
+  SELECT HUID(`uuid`), HUID(cash_uuid), allocated_cost, HUID(invoice_uuid) FROM bhima.cash_item;
 
 CREATE TEMPORARY TABLE `cash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
 INSERT INTO `cash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
 
 UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
 UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
+
+COMMIT;
+
+/*
+Vouchers - Create Reversals for Cash Payments
+
+This following statements will create voucher reversals for vouchers.  The strategy
+is to copy the posting journal transactions into vouchers.
+*/
+
+-- reconstitute cash reversals as voucher reversals. In the 1.x database, there are 1282 of them.
+-- this is the 1.x transaction type for cash_discard
+SET @typeCashDiscard = 26;
+CREATE TEMPORARY TABLE cash_discard_migration AS
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.general_ledger
+  WHERE origin_id = @typeCashDiscard;
+
+INSERT INTO cash_discard_migration
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.posting_journal
+  WHERE origin_id = @typeCashDiscard;
+
+INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
+  SELECT HUID(UUID()), MAX(trans_date), MAX(cd.project_id), NULL, MAX(currency_id), MAX(cd.cost), MAX(cdm.description), MAX(user_id), MAX(trans_date), @typeCashDiscard, MAX(HUID(cd.cash_uuid)), 0
+  FROM cash_discard_migration cdm JOIN bhima.cash_discard cd ON cdm.description = cd.description
+  GROUP BY trans_id;
+
+INSERT INTO voucher_item (uuid, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+  SELECT HUID(UUID()), cdm.account_id, cdm.debit, cdm.credit, v.uuid, IF(cdm.credit > 0, HUID(cd.cash_uuid), NULL), IF(cdm.credit > 0, HUID(cd.debitor_uuid), NULL)
+  FROM cash_discard_migration cdm JOIN bhima.cash_discard cd ON cdm.description = cd.description
+    JOIN voucher v ON cdm.description = v.description;
+
+UPDATE posting_journal gl JOIN voucher v ON gl.description = v.description SET gl.record_uuid = v.uuid WHERE gl.transaction_type_id = @typeCashDiscard;
+UPDATE general_ledger gl JOIN voucher v ON gl.description = v.description SET gl.record_uuid = v.uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 
 COMMIT;
 
@@ -625,11 +659,71 @@ UPDATE posting_journal pj JOIN pcash_record_map crm ON pj.trans_id = crm.trans_i
 
 COMMIT;
 
+SET @creditNoteType = 10;
+SET @currencyId = 2;
+
+/*
+Make credit notes into vouchers.
+
+NOTE: thankfully, only one credit note per invoice. Confirm by:
+select count(sale_uuid) n, sale_uuid FROM credit_note GROUP BY sale_uuid HAVING n > 1;
+*/
+INSERT INTO voucher (
+  uuid, date, project_id, currency_id, amount, description, user_id, created_at,
+  type_id, reference_uuid
+) SELECT
+  HUID(cn.uuid), note_date, project_id, @currencyId, cost, description, @JOHN_DOE,
+  TIMESTAMP(note_date), @creditNoteType, HUID(sale_uuid)
+FROM bhima.credit_note cn JOIN bhima.debitor ON cn.debitor_uuid = debitor.uuid;
+
+-- add the patient side of the voucher items
+INSERT INTO voucher_item
+  SELECT HUID(UUID()), dg.account_id, 0, cost, HUID(cn.uuid), HUID(sale_uuid), HUID(debitor_uuid)
+  FROM bhima.credit_note cn
+  JOIN bhima.debitor d ON cn.debitor_uuid = d.uuid
+  JOIN bhima.debitor_group dg ON d.group_uuid = dg.uuid;
+
+-- add the other side of the transaction
+INSERT INTO voucher_item
+  SELECT HUID(UUID()), ig.sales_account, si.quantity * si.transaction_price, 0, HUID(cn.uuid), NULL,NULL
+    FROM bhima.credit_note cn
+    JOIN bhima.sale_item si ON cn.sale_uuid = si.sale_uuid
+    JOIN bhima.inventory i ON si.inventory_uuid = i.uuid
+    JOIN bhima.inventory_group ig ON i.group_uuid = ig.uuid;
+
+COMMIT;
+
 /*
 Hack hack hack
+
+This corrects values that were not updated for some reason in their reports :/
 */
 UPDATE general_ledger gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
 UPDATE posting_journal gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
+
+COMMIT;
+
+/*
+Update Journal + GL make cash payments reference invoices
+*/
+CREATE TEMPORARY TABLE invoice_links AS
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+INSERT INTO invoice_links
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+
+DROP TABLE invoice_links;
+
+COMMIT;
 
 /* ENABLE AUTOCOMMIT AFTER THE SCRIPT */
 SET autocommit=1;
