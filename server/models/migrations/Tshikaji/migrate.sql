@@ -602,8 +602,11 @@ INSERT INTO voucher_item (uuid, account_id, debit, credit, voucher_uuid, documen
   FROM cash_discard_migration cdm JOIN bhima.cash_discard cd ON cdm.description = cd.description
     JOIN voucher v ON cdm.description = v.description;
 
-UPDATE posting_journal gl JOIN voucher v ON gl.description = v.description SET gl.record_uuid = v.uuid WHERE gl.transaction_type_id = @typeCashDiscard;
-UPDATE general_ledger gl JOIN voucher v ON gl.description = v.description SET gl.record_uuid = v.uuid WHERE gl.transaction_type_id = @typeCashDiscard;
+ALTER TABLE cash_discard_migration ADD COLUMN voucher_uuid BINARY(16);
+UPDATE cash_discard_migration cdm JOIN voucher_item vi ON cdm.account_id = vi.account_id AND cdm.debit = vi.debit AND cdm.credit = vi.credit SET cdm.voucher_uuid = vi.voucher_uuid;
+
+UPDATE posting_journal gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
+UPDATE general_ledger gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 
 COMMIT;
 
@@ -647,7 +650,7 @@ UPDATE temp_voucher_item SET `uuid` = HUID(UUID()) WHERE `uuid` IS NOT NULL;
 /* VOUCHER ITEM */
 /* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
 INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
+  SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
 
 COMMIT;
 
