@@ -70,6 +70,8 @@ CREATE PROCEDURE ComputePeriodZero(
 
   SET periodZeroId = CONCAT(year, 0);
 
+  -- UPDATE period SET start_date = DATE(CONCAT(year, '-01-01')) AND end_date = DATE(CONCAT(year, '-01-01'));
+
   INSERT INTO period_total (enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked)
     SELECT enterpriseId, fyId, periodZeroId, account_id, SUM(credit), SUM(debit), 0
     FROM period_total
@@ -154,14 +156,13 @@ SELECT id, name, abbr, enterprise_id, zs_id, 0 FROM bhima.project
 ON DUPLICATE KEY UPDATE id = bhima.project.id;
 
 /* USER */
-ALTER TABLE `user` DROP KEY UNIQUE KEY `user_1`;
-INSERT INTO `user` (id, username, password, display_name, email, active, deactivated, pin, last_login)
-  SELECT id, username, password, CONCAT(first, ' ', last), email, active, 0, pin, IF(TIMESTAMP(last_login), TIMESTAMP(last_login), NOW()) FROM bhima.`user`
-ON DUPLICATE KEY UPDATE id = bhima.`user`.id;
+CREATE TEMPORARY TABLE user_migration AS SELECT * FROM bhima.user;
 
-/* UPDATE DUPLICATED USERNAME */
-UPDATE TABLE `user` SET `username` = 'jean_sekundo' WHERE id = 18;
-ALTER TABLE `user` ADD KEY UNIQUE KEY `user_1` (`username`);
+-- this user hasn't logged in since January.  I hope this is okay.
+UPDATE user_migration SET username = 'jean_ndolo' where id = 22;
+
+INSERT INTO `user` (id, username, password, display_name, email, active, deactivated, pin, last_login)
+  SELECT id, username, password, CONCAT(first, ' ', last), email, active, 0, pin, IF(TIMESTAMP(last_login), TIMESTAMP(last_login), NOW()) FROM user_migration;
 
 /*
   CREATE THE SUPERUSER for attributing permissions
@@ -287,8 +288,8 @@ text to the label and prepending 9 to the account number.
 
 -- SELECT account_number from account GROUP BY account_number HAVING COUNT(account_number) = 2;
 ALTER TABLE account DROP KEY `account_1`;
-INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked, cc_id, pc_id, created, classe, reference_id)
-  SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, IF(locked, 1, IF(is_ohada, 0, 1)), cc_id, pc_id, created, classe, reference_id FROM bhima.account
+INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked, hidden, cc_id, pc_id, created, classe, reference_id)
+  SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, locked, IF(is_ohada, 0, 1), cc_id, pc_id, created, classe, reference_id FROM bhima.account
 ON DUPLICATE KEY UPDATE id = bhima.account.id, number = bhima.account.account_number, label = bhima.account.account_txt, parent = bhima.account.parent;
 -- ALTER TABLE account ADD UNIQUE KEY `account_1` (`number`);
 
@@ -425,16 +426,13 @@ sale --> invoice
 The following code deals with invoices and invoice links to the posting journal.
 In 1.x, we used inv_po_id to link the `posting_journal` to the `sale` table.
 */
+SET @saleTransactionType = 2;
 
-/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
 CREATE TEMPORARY TABLE `sale_record_map` AS
-  SELECT HUID(s.uuid) AS uuid, p.trans_id FROM bhima.sale s JOIN bhima.posting_journal p ON s.uuid = p.inv_po_id;
+  SELECT HUID(s.uuid) AS uuid, p.trans_id FROM bhima.sale s JOIN bhima.posting_journal p ON s.uuid = p.inv_po_id WHERE p.origin_id = @saleTransactionType;
 
 INSERT INTO `sale_record_map`
-  SELECT HUID(s.uuid) AS uuid, g.trans_id FROM bhima.sale s JOIN bhima.general_ledger g ON s.uuid = g.inv_po_id;
-/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
+  SELECT HUID(s.uuid) AS uuid, g.trans_id FROM bhima.sale s JOIN bhima.general_ledger g ON s.uuid = g.inv_po_id WHERE g.origin_id = @saleTransactionType;
 
 /* INDEX FOR SALE RECORD MAP */
 ALTER TABLE sale_record_map ADD INDEX `uuid` (`uuid`);
@@ -445,19 +443,26 @@ ALTER TABLE sale_record_map ADD INDEX `uuid` (`uuid`);
   select count(*) from sale where sale.seller_id not in (select id from `user`);
   I WILL CONSIDER JUST SALE MADE BY EXISTING USERS
 */
+
+CREATE TEMPORARY TABLE sale_migration AS SELECT * FROM bhima.sale;
+
+-- we have duplicate references to clean up
+CREATE TEMPORARY TABLE sale_reference_dupes AS
+  SELECT reference FROM bhima.sale GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+
+UPDATE sale_migration SET reference = ((sale_migration.reference  * RAND() * 10000) + 100000) WHERE reference in (select reference FROM sale_reference_dupes);
+
 INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_id, user_id, `date`, description)
-  SELECT project_id, reference, HUID(`uuid`), cost, HUID(debitor_uuid), service_id, IF(seller_id = 0, 1, seller_id), invoice_date, note FROM bhima.sale
-ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.sale.`uuid`);
+  SELECT project_id, reference, HUID(`uuid`), cost, HUID(debitor_uuid), service_id, IF(seller_id = 0, @JOHN_DOE, seller_id), invoice_date, note
+  FROM sale_migration;
 
 /* INVOICE ITEM */
 /*
   SELECT JUST invoice_item for invoice who exist
   THIS QUERY TAKE TOO LONG TIME
 */
-CREATE TEMPORARY TABLE temp_sale_item AS SELECT HUID(sale_uuid) AS sale_uuid, HUID(`uuid`) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
-FROM bhima.sale_item WHERE HUID(bhima.sale_item.sale_uuid) IN (
-  SELECT uuid from sale_record_map
-);
+CREATE TEMPORARY TABLE temp_sale_item AS SELECT HUID(sale_uuid) AS sale_uuid, HUID(bhima.sale_item.`uuid`) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
+FROM bhima.sale_item JOIN sale_record_map ON HUID(bhima.sale_item.sale_uuid) = sale_record_map.uuid;
 
 /* remove the unique key for boosting the insert operation */
 -- ALTER TABLE invoice_item DROP KEY `invoice_item_1`;
@@ -532,6 +537,7 @@ ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.patient.uuid);
 COMMIT;
 
 /* CASH_BOX */
+
 INSERT INTO cash_box (id, label, project_id, is_auxiliary)
 SELECT id, `text`, project_id, is_auxillary FROM bhima.cash_box
 ON DUPLICATE KEY UPDATE id = bhima.cash_box.id;
@@ -544,20 +550,25 @@ ON DUPLICATE KEY UPDATE id = bhima.cash_box_account_currency.id;
 COMMIT;
 
 -- filter for the cash table
-/*
-CREATE TEMPORARY TABLE deb_cred_filter AS
-  SELECT d.uuid FROM bhima.debitor d JOIN bhima.debitor_group dg ON dg.uuid = d.group_uuid WHERE dg.account_id IN (210, 257, 1074);
-*/
 
 /* CASH */
 /*
   c54a8769-3e4f-4899-bc43-ef896d3919b3 is a deb_cred_uuid with type D which doesn't exist in the debitor table in 1.x
   with as cash uuid 524475fb-9762-4051-960c-e5796a14d300
 */
+
+-- select project_id, reference, count(reference) n from cash GROUP BY project_id, reference HAVING n > 1;
+CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash;
+
+-- we have duplicate references to clean up
+CREATE TEMPORARY TABLE cash_reference_dupes AS
+  SELECT reference FROM bhima.cash GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+
+UPDATE cash_migrate SET reference = FLOOR(reference * 10000 * RAND()) + 45000 WHERE reference IN (SELECT reference FROM cash_reference_dupes);
+
 INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
-SELECT HUID(bhima.cash.`uuid`), bhima.cash.project_id, bhima.cash.reference, bhima.cash.`date`, HUID(bhima.cash.deb_cred_uuid), bhima.cash.currency_id, bhima.cash.cost, bhima.cash.user_id, bhima.cash.cashbox_id, bhima.cash.description, bhima.cash.is_caution, IF(bhima.cash_discard.`uuid` <> NULL, 1, 0), 0, CURRENT_TIMESTAMP()
-FROM bhima.cash LEFT JOIN bhima.cash_discard ON bhima.cash_discard.cash_uuid = bhima.cash.`uuid`;
-/*WHERE bhima.cash.deb_cred_uuid NOT IN (SELECT uuid FROM deb_cred_filter)*/
+SELECT HUID(cm.uuid), cm.project_id, cm.reference, cm.`date`, HUID(cm.deb_cred_uuid), cm.currency_id, cm.cost, cm.user_id, cm.cashbox_id, cm.description, cm.is_caution, IF(bhima.cash_discard.`uuid` IS NULL, 0, 1), 0, CURRENT_TIMESTAMP()
+FROM cash_migrate cm LEFT JOIN bhima.cash_discard ON bhima.cash_discard.cash_uuid = cm.uuid;
 
 /* CASH ITEM */
 /*
@@ -572,7 +583,8 @@ INSERT INTO `cash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima
 UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
 UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
 
-COMMIT;
+DROP TABLE cash_reference_dupes;
+DROP TABLE cash_migrate;
 
 COMMIT;
 
