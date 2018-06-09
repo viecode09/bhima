@@ -574,6 +574,94 @@ UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id
 
 COMMIT;
 
+COMMIT;
+
+/* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
+/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
+/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
+CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
+  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
+  UNION ALL
+  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
+) as combined;
+/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
+/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
+
+/* INDEX IN COMBINED */
+ALTER TABLE combined_ledger ADD INDEX `uuid` (`uuid`);
+ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
+
+/* VOUCHER */
+INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
+SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0 FROM bhima.primary_cash pc
+ON DUPLICATE KEY UPDATE `uuid` = HUID(pc.`uuid`);
+
+/* FIX UNKNOWN USERS */
+UPDATE voucher SET user_id = @JOHN_DOE WHERE user_id NOT IN (SELECT u.id FROM user u);
+
+/* TEMPORARY VOUCHER ITEMS JOINED TO COMBINED LEDGER */
+CREATE TEMPORARY TABLE temp_voucher_item AS
+  SELECT HUID(pci.`uuid`) AS `uuid`, cl.account_id, cl.debit, cl.credit, HUID(pci.primary_cash_uuid) AS voucher_uuid, HUID(pci.document_uuid) AS document_uuid, HUID(pc.deb_cred_uuid) AS deb_cred_uuid
+  FROM bhima.primary_cash_item pci
+  JOIN bhima.primary_cash pc ON pc.uuid = pci.primary_cash_uuid
+  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid
+  GROUP BY cl.uuid;
+
+/* INDEX IN TEMP VOUCHER ITEM */
+ALTER TABLE temp_voucher_item ADD INDEX `uuid` (`uuid`);
+
+/* REMOVE DUPLICATED UUID BY SETTING UP NEW UUID FOR EACH ROW */
+UPDATE temp_voucher_item SET `uuid` = HUID(UUID()) WHERE `uuid` IS NOT NULL;
+
+/* VOUCHER ITEM */
+/* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
+INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+  SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
+
+COMMIT;
+
+CREATE TEMPORARY TABLE `pcash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
+INSERT INTO `pcash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
+
+UPDATE general_ledger gl JOIN pcash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
+UPDATE posting_journal pj JOIN pcash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
+
+COMMIT;
+
+
+/*
+Hack hack hack
+
+This corrects values that were not updated for some reason in their reports :/
+*/
+UPDATE general_ledger gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
+UPDATE posting_journal gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
+
+COMMIT;
+
+/*
+Linking - Journal/General Ledger
+
+Update Journal + GL make cash payments reference invoices.
+
+*/
+CREATE TEMPORARY TABLE invoice_links AS
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+INSERT INTO invoice_links
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+
+DROP TABLE invoice_links;
+
 /*
 Vouchers - Create Reversals for Cash Payments
 
@@ -608,123 +696,43 @@ UPDATE cash_discard_migration cdm JOIN voucher_item vi ON cdm.account_id = vi.ac
 UPDATE posting_journal gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 UPDATE general_ledger gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 
-COMMIT;
-
-/* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
-/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
-CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
-  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
-  UNION ALL
-  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
-) as combined;
-/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
-
-/* INDEX IN COMBINED */
-ALTER TABLE combined_ledger ADD INDEX `uuid` (`uuid`);
-ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
-
-/* VOUCHER */
-INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
-SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0 FROM bhima.primary_cash pc
-ON DUPLICATE KEY UPDATE `uuid` = HUID(pc.`uuid`);
- 
-/* FIX UNKNOWN USERS */
-UPDATE voucher SET user_id = @JOHN_DOE WHERE user_id NOT IN (SELECT u.id FROM user u);
-
-/* TEMPORARY VOUCHER ITEMS JOINED TO COMBINED LEDGER */
-CREATE TEMPORARY TABLE temp_voucher_item AS
-  SELECT HUID(pci.`uuid`) AS `uuid`, cl.account_id, cl.debit, cl.credit, HUID(pci.primary_cash_uuid) AS voucher_uuid, HUID(pci.document_uuid) AS document_uuid, HUID(pc.deb_cred_uuid) AS deb_cred_uuid
-  FROM bhima.primary_cash_item pci
-  JOIN bhima.primary_cash pc ON pc.uuid = pci.primary_cash_uuid
-  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid
-  GROUP BY cl.uuid;
-
-/* INDEX IN TEMP VOUCHER ITEM */
-ALTER TABLE temp_voucher_item ADD INDEX `uuid` (`uuid`);
-
-/* REMOVE DUPLICATED UUID BY SETTING UP NEW UUID FOR EACH ROW */
-UPDATE temp_voucher_item SET `uuid` = HUID(UUID()) WHERE `uuid` IS NOT NULL;
-
-/* VOUCHER ITEM */
-/* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
-INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-  SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
+DROP TABLE cash_discard_migration;
 
 COMMIT;
-
-CREATE TEMPORARY TABLE `pcash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
-INSERT INTO `pcash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
-
-UPDATE general_ledger gl JOIN pcash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
-UPDATE posting_journal pj JOIN pcash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
-
-COMMIT;
-
-SET @creditNoteType = 10;
-SET @currencyId = 2;
 
 /*
-Make credit notes into vouchers.
+Vouchers - Create Reversals for Invoices (Credit Notes)
 
 NOTE: thankfully, only one credit note per invoice. Confirm by:
 select count(sale_uuid) n, sale_uuid FROM credit_note GROUP BY sale_uuid HAVING n > 1;
 */
-INSERT INTO voucher (
-  uuid, date, project_id, currency_id, amount, description, user_id, created_at,
-  type_id, reference_uuid
-) SELECT
-  HUID(cn.uuid), note_date, project_id, @currencyId, cost, description, @JOHN_DOE,
-  TIMESTAMP(note_date), @creditNoteType, HUID(sale_uuid)
-FROM bhima.credit_note cn JOIN bhima.debitor ON cn.debitor_uuid = debitor.uuid;
+SET @creditNoteType = 6;
+SET @currencyId = 2;
+CREATE TEMPORARY TABLE credit_note_migration AS
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.general_ledger
+  WHERE origin_id = @creditNoteType;
 
--- add the patient side of the voucher items
-INSERT INTO voucher_item
-  SELECT HUID(UUID()), dg.account_id, 0, cost, HUID(cn.uuid), HUID(sale_uuid), HUID(debitor_uuid)
-  FROM bhima.credit_note cn
-  JOIN bhima.debitor d ON cn.debitor_uuid = d.uuid
-  JOIN bhima.debitor_group dg ON d.group_uuid = dg.uuid;
+INSERT INTO credit_note_migration
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.posting_journal
+  WHERE origin_id = @creditNoteType;
 
--- add the other side of the transaction
-INSERT INTO voucher_item
-  SELECT HUID(UUID()), ig.sales_account, si.quantity * si.transaction_price, 0, HUID(cn.uuid), NULL,NULL
-    FROM bhima.credit_note cn
-    JOIN bhima.sale_item si ON cn.sale_uuid = si.sale_uuid
-    JOIN bhima.inventory i ON si.inventory_uuid = i.uuid
-    JOIN bhima.inventory_group ig ON i.group_uuid = ig.uuid;
+INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
+  SELECT HUID(UUID()), MAX(trans_date), MAX(cn.project_id), NULL, MAX(currency_id), MAX(cn.cost), MAX(cnm.description), MAX(user_id), MAX(trans_date), @creditNoteType, MAX(HUID(cn.sale_uuid)), 0
+  FROM credit_note_migration cnm JOIN bhima.credit_note cn ON cnm.description = cn.description
+  GROUP BY trans_id;
 
-COMMIT;
+INSERT INTO voucher_item (uuid, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+  SELECT HUID(UUID()), cnm.account_id, cnm.debit, cnm.credit, v.uuid, HUID(cn.sale_uuid), HUID(cn.debitor_uuid)
+  FROM credit_note_migration cnm JOIN bhima.credit_note cn ON cnm.description = cn.description
+    JOIN voucher v ON cnm.description = v.description;
 
-/*
-Hack hack hack
+ALTER TABLE credit_note_migration ADD COLUMN voucher_uuid BINARY(16);
+UPDATE credit_note_migration cdm JOIN voucher_item vi ON cdm.account_id = vi.account_id AND cdm.debit = vi.debit AND cdm.credit = vi.credit SET cdm.voucher_uuid = vi.voucher_uuid;
 
-This corrects values that were not updated for some reason in their reports :/
-*/
-UPDATE general_ledger gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
-UPDATE posting_journal gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
+UPDATE posting_journal gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
+UPDATE general_ledger gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 
-COMMIT;
-
-/*
-Update Journal + GL make cash payments reference invoices
-*/
-CREATE TEMPORARY TABLE invoice_links AS
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-INSERT INTO invoice_links
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-
-DROP TABLE invoice_links;
+DROP TABLE credit_note_migration;
 
 COMMIT;
 
