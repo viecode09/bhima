@@ -39,7 +39,6 @@ SET unique_checks=0;
 /*!40101 SET NAMES utf8 */;
 /*!40101 SET character_set_client = utf8 */;
 
-
 /*
 Useful Functions/ Procedures
 */
@@ -285,7 +284,7 @@ account types based on account class.
 First we eliminate duplicates from the accounts.  We do this by appending random
 text to the label and prepending 9 to the account number.
 */
-CREATE TEMPORARY TABLE account_migration AS SELECT * FROM account;
+CREATE TEMPORARY TABLE account_migration AS SELECT * FROM bhima.account;
 
 -- hard to remove accounts, never used.
 DELETE FROM account_migration WHERE id IN (3967, 3968, 3944);
@@ -629,16 +628,10 @@ ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
 -- create a table we can manipulate
 CREATE TEMPORARY TABLE migrate_primary_cash AS SELECT * FROM bhima.primary_cash;
 
-CREATE TEMPORARY TABLE primary_cash_trans_ids AS
-
-
 /* VOUCHER */
 INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
   SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0
   FROM bhima.primary_cash pc
-
-/* FIX UNKNOWN USERS */
-UPDATE voucher SET user_id = @JOHN_DOE WHERE user_id NOT IN (SELECT u.id FROM user u);
 
 /* TEMPORARY VOUCHER ITEMS JOINED TO COMBINED LEDGER */
 CREATE TEMPORARY TABLE temp_voucher_item AS
