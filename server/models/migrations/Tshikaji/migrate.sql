@@ -286,6 +286,7 @@ First we eliminate duplicates from the accounts.  We do this by appending random
 text to the label and prepending 9 to the account number.
 */
 CREATE TEMPORARY TABLE account_migration AS SELECT * FROM account;
+
 -- hard to remove accounts, never used.
 DELETE FROM account_migration WHERE id IN (3967, 3968, 3944);
 
@@ -300,6 +301,9 @@ INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked
   SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, locked, IF(is_ohada, 0, 1), cc_id, pc_id, created, classe, reference_id
   FROM account_migration;
 
+DROP TABLE account_migration;
+
+COMMIT;
 /*
 First, we treat the title accounts.  These are any accounts with children, and
 all accounts with the previous title type.
@@ -551,6 +555,8 @@ SELECT
 FROM patient_migration;
 /*!40000 ALTER TABLE `patient` ENABLE KEYS */;
 
+DROP TABLE patient_migration;
+
 COMMIT;
 
 /* CASH_BOX */
@@ -762,6 +768,14 @@ UPDATE posting_journal gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.tr
 UPDATE general_ledger gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
 
 DROP TABLE credit_note_migration;
+
+COMMIT;
+
+INSERT INTO patient_group
+  SELECT HUID(`uuid`), enterprise_id, HUID(`price_list_uuid`), name, IFNULL(note, ""), created FROM bhima.patient_group;
+
+INSERT INTO patient_assignment
+  SELECT HUID(`uuid`), HUID(patient_group_uuid), HUID(patient_uuid) FROM bhima.assignation_patient;
 
 COMMIT;
 
