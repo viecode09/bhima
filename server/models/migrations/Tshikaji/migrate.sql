@@ -615,7 +615,7 @@ COMMIT;
 /*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
 CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
-  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.posting_journal
+  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima_test.posting_journal
   UNION ALL
   SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
 ) as combined;
@@ -626,10 +626,16 @@ CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, cred
 ALTER TABLE combined_ledger ADD INDEX `uuid` (`uuid`);
 ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
 
+-- create a table we can manipulate
+CREATE TEMPORARY TABLE migrate_primary_cash AS SELECT * FROM bhima.primary_cash;
+
+CREATE TEMPORARY TABLE primary_cash_trans_ids AS
+
+
 /* VOUCHER */
 INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
-SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0 FROM bhima.primary_cash pc
-ON DUPLICATE KEY UPDATE `uuid` = HUID(pc.`uuid`);
+  SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0
+  FROM bhima.primary_cash pc
 
 /* FIX UNKNOWN USERS */
 UPDATE voucher SET user_id = @JOHN_DOE WHERE user_id NOT IN (SELECT u.id FROM user u);
