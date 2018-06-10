@@ -458,9 +458,12 @@ CREATE TEMPORARY TABLE sale_migration AS SELECT * FROM bhima.sale;
 
 -- we have duplicate references to clean up
 CREATE TEMPORARY TABLE sale_reference_dupes AS
-  SELECT reference FROM bhima.sale GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM sale_migration GROUP BY project_id, reference HAVING COUNT(reference) > 1;
 
-UPDATE sale_migration SET reference = ((sale_migration.reference  * RAND() * 10000) + 100000) WHERE reference in (select reference FROM sale_reference_dupes);
+SET @s = (SELECT max(reference) FROM sale_migration);
+UPDATE sale_reference_dupes SET n = (@s := @s + 1);
+
+UPDATE sale_migration sm JOIN sale_reference_dupes sd ON sm.uuid = sd.uuid SET sm.reference = sd.n;
 
 INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_id, user_id, `date`, description)
   SELECT project_id, reference, HUID(`uuid`), cost, HUID(debitor_uuid), service_id, IF(seller_id = 0, @JOHN_DOE, seller_id), invoice_date, note
@@ -471,15 +474,14 @@ INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_i
   SELECT JUST invoice_item for invoice who exist
   THIS QUERY TAKE TOO LONG TIME
 */
-CREATE TEMPORARY TABLE temp_sale_item AS SELECT HUID(sale_uuid) AS sale_uuid, HUID(bhima.sale_item.`uuid`) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
+CREATE TEMPORARY TABLE temp_sale_item AS
+  SELECT HUID(sale_uuid) AS sale_uuid, HUID(bhima.sale_item.`uuid`) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
 FROM bhima.sale_item JOIN sale_record_map ON HUID(bhima.sale_item.sale_uuid) = sale_record_map.uuid;
 
 /* remove the unique key for boosting the insert operation */
--- ALTER TABLE invoice_item DROP KEY `invoice_item_1`;
 INSERT INTO invoice_item (invoice_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit)
   SELECT sale_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit FROM temp_sale_item
 ON DUPLICATE KEY UPDATE `uuid` = temp_sale_item.`uuid`;
--- ALTER TABLE invoice_item ADD UNIQUE KEY `invoice_item_1` (`invoice_uuid`, `inventory_uuid`);
 
 COMMIT;
 
@@ -528,16 +530,27 @@ COMMIT;
 -- drop the FULLTEXT index for a perf boost
 ALTER TABLE `patient` DROP KEY `display_name`;
 
-CREATE TABLE patient_migration AS SELECT * FROM patient;
+CREATE TEMPORARY TABLE patient_migration AS SELECT * FROM bhima.patient;
 
 DELETE FROM patient_migration WHERE debitor_uuid = 'e27aecd1-5122-4c34-8aa6-1187edc8e597';
+
 UPDATE patient_migration SET hospital_no = REPLACE(hospital_no, ' ', '');
-UPDATE patient_migration SET hospital_no = CONCAT('BH-', HEX(RAND() * 100000000000000)) WHERE hospital_no IS NULL OR hospital_no = "0";
+UPDATE patient_migration SET hospital_no = CONCAT('BH-', HEX(RAND() * 1000000000000)) WHERE hospital_no IS NULL OR hospital_no = "0";
 
 CREATE TEMPORARY TABLE patient_hospital_no_dupes AS
-  SELECT hospital_no, max(reference) AS reference FROM patient_migration GROUP BY hospital_no HAVING COUNT(hospital_no) > 1;
+  SELECT hospital_no, max(uuid) AS uuid FROM patient_migration GROUP BY hospital_no HAVING COUNT(hospital_no) > 1;
 
-DELETE FROM patient_migration INNER JOIN patient_hospital_no_dupes ph ON patient_migration.hospital_no = ph.hospital_no WHERE pm.reference = ph.reference;
+DELETE patient_migration FROM patient_migration INNER JOIN patient_hospital_no_dupes ph ON patient_migration.hospital_no = ph.hospital_no WHERE patient_migration.uuid <> ph.uuid;
+
+-- 82 repeated patient references
+CREATE TEMPORARY TABLE patient_reference_dupes AS
+  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM patient_migration GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+
+SET @m = (SELECT max(reference) FROM patient_migration);
+UPDATE patient_reference_dupes SET n = (@m := @m + 1);
+
+-- choose one project at random to shift up.  We will use HBB
+UPDATE patient_migration pm JOIN patient_reference_dupes pd ON pm.uuid = pd.uuid SET pm.reference = pd.n;
 
 /*!40000 ALTER TABLE `patient` DISABLE KEYS */;
 INSERT INTO patient (
@@ -584,9 +597,13 @@ CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash;
 
 -- we have duplicate references to clean up
 CREATE TEMPORARY TABLE cash_reference_dupes AS
-  SELECT reference FROM bhima.cash GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM cash_migrate GROUP BY project_id, reference HAVING COUNT(reference) > 1;
 
-UPDATE cash_migrate SET reference = FLOOR(reference * 10000 * RAND()) + 45000 WHERE reference IN (SELECT reference FROM cash_reference_dupes);
+SET @c = (SELECT max(reference) FROM cash_migrate);
+UPDATE cash_reference_dupes SET n = (@c := @c + 1);
+
+-- choose one project at random to shift up.  We will use HBB
+UPDATE cash_migrate cm JOIN cash_reference_dupes cd ON cm.uuid = cd.uuid SET cm.reference = cd.n;
 
 INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
 SELECT HUID(cm.uuid), cm.project_id, cm.reference, cm.`date`, HUID(cm.deb_cred_uuid), cm.currency_id, cm.cost, cm.user_id, cm.cashbox_id, cm.description, cm.is_caution, IF(bhima.cash_discard.`uuid` IS NULL, 0, 1), 0, CURRENT_TIMESTAMP()
@@ -613,55 +630,70 @@ COMMIT;
 /* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
 /*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
-CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM (
-  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima_test.posting_journal
+CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM (
+  SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM bhima.posting_journal
   UNION ALL
-  SELECT `uuid`, account_id, debit, credit, deb_cred_uuid, inv_po_id FROM bhima.general_ledger
+  SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM bhima.general_ledger
 ) as combined;
 /*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
 
 /* INDEX IN COMBINED */
-ALTER TABLE combined_ledger ADD INDEX `uuid` (`uuid`);
 ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
+-- ALTER TABLE combined_ledger ADD INDEX `trans_id` (`trans_id`);
 
 -- create a table we can manipulate
-CREATE TEMPORARY TABLE migrate_primary_cash AS SELECT * FROM bhima.primary_cash;
+CREATE TEMPORARY TABLE migrate_primary_cash_item AS SELECT * FROM bhima.primary_cash_item;
+ALTER TABLE migrate_primary_cash_item ADD INDEX `document_uuid` (`document_uuid`);
+
+-- maps pci uuids onto transactions and prepares vouchers
+CREATE TEMPORARY TABLE pci_ledger AS
+  SELECT HUID(pc.uuid) uuid, MAX(l.trans_id) AS trans_id, MAX(pc.reference) reference, MAX(pc.cost) amount,
+    MAX(pc.currency_id) currency_id, MAX(pc.date) `date`, MAX(pc.project_id) project_id, MAX(pc.description) description,
+    MAX(pc.user_id) user_id, MAX(l.origin_id) origin_id
+  FROM migrate_primary_cash_item pci
+    JOIN combined_ledger l ON pci.document_uuid = l.inv_po_id
+    JOIN bhima.primary_cash pc ON pci.primary_cash_uuid = pc.uuid
+  GROUP BY pc.uuid;
+
+/*
+ NOTE: after this operation, we are still missing ~675 vouchers.
+
+There are all made by user 18, thankfully.  We can use this to pre-filter the
+combined ledger;
+*/
 
 /* VOUCHER */
-INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
-  SELECT HUID(pc.`uuid`), pc.`date`, pc.project_id, pc.reference, pc.currency_id, pc.cost, pc.description, pc.user_id, pc.`date`, pc.origin_id, NULL, 0
-  FROM bhima.primary_cash pc
+INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid)
+  SELECT `uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, date, origin_id, NULL
+  FROM pci_ledger;
 
-/* TEMPORARY VOUCHER ITEMS JOINED TO COMBINED LEDGER */
-CREATE TEMPORARY TABLE temp_voucher_item AS
-  SELECT HUID(pci.`uuid`) AS `uuid`, cl.account_id, cl.debit, cl.credit, HUID(pci.primary_cash_uuid) AS voucher_uuid, HUID(pci.document_uuid) AS document_uuid, HUID(pc.deb_cred_uuid) AS deb_cred_uuid
-  FROM bhima.primary_cash_item pci
-  JOIN bhima.primary_cash pc ON pc.uuid = pci.primary_cash_uuid
-  JOIN combined_ledger cl ON cl.inv_po_id = pci.document_uuid
-  GROUP BY cl.uuid;
-
-/* INDEX IN TEMP VOUCHER ITEM */
-ALTER TABLE temp_voucher_item ADD INDEX `uuid` (`uuid`);
-
-/* REMOVE DUPLICATED UUID BY SETTING UP NEW UUID FOR EACH ROW */
-UPDATE temp_voucher_item SET `uuid` = HUID(UUID()) WHERE `uuid` IS NOT NULL;
+/*
+USE INDEXES FOR SPEED GAINS
+Can't index TEXT?  MAKE IT VARCHAR
+*/
+ALTER TABLE combined_ledger MODIFY trans_id VARCHAR(50);
+ALTER TABLE pci_ledger MODIFY trans_id VARCHAR(50);
+ALTER TABLE combined_ledger ADD INDEX `trans_id` (`trans_id`);
+ALTER TABLE pci_ledger ADD INDEX `trans_id` (`trans_id`);
 
 /* VOUCHER ITEM */
 /* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
 INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-  SELECT `uuid`, account_id, debit, credit, voucher_uuid, document_uuid, deb_cred_uuid FROM temp_voucher_item;
+  SELECT HUID(UUID()), cl.account_id, cl.debit, cl.credit, pci_ledger.uuid, NULL, HUID(deb_cred_uuid)
+  FROM pci_ledger JOIN combined_ledger cl ON pci_ledger.trans_id = cl.trans_id;
+
+DROP TABLE combined_ledger;
+DROP TABLE migrate_primary_cash_item;
 
 COMMIT;
 
-CREATE TEMPORARY TABLE `pcash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
-INSERT INTO `pcash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.primary_cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
+UPDATE general_ledger gl JOIN pci_ledger l ON gl.trans_id = l.trans_id SET gl.record_uuid = l.uuid;
+UPDATE posting_journal pj JOIN pci_ledger l ON pj.trans_id = l.trans_id SET pj.record_uuid = l.uuid;
 
-UPDATE general_ledger gl JOIN pcash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
-UPDATE posting_journal pj JOIN pcash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
+DROP TABLE pci_ledger;
 
 COMMIT;
-
 
 /*
 Hack hack hack
@@ -776,7 +808,7 @@ COMMIT;
 INSERT INTO patient_group
   SELECT HUID(`uuid`), enterprise_id, HUID(`price_list_uuid`), name, IFNULL(note, ""), created FROM bhima.patient_group;
 
-INSERT INTO patient_assignment
+INSERT IGNORE INTO patient_assignment
   SELECT HUID(`uuid`), HUID(patient_group_uuid), HUID(patient_uuid) FROM bhima.assignation_patient;
 
 COMMIT;
