@@ -751,23 +751,26 @@ INSERT INTO credit_note_migration
   SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.posting_journal
   WHERE origin_id = @creditNoteType;
 
+CREATE TEMPORARY TABLE credit_note_uuids AS
+  SELECT DISTINCT trans_id, HUID(UUID()) AS `uuid` FROM credit_note_migration;
+
 INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
-  SELECT HUID(UUID()), MAX(trans_date), MAX(cn.project_id), NULL, MAX(currency_id), MAX(cn.cost), MAX(cnm.description), MAX(user_id), MAX(trans_date), @creditNoteType, MAX(HUID(cn.sale_uuid)), 0
+  SELECT MAX(cnu.uuid), MAX(trans_date), MAX(cn.project_id), NULL, MAX(currency_id), MAX(cn.cost), MAX(cnm.description), MAX(user_id), MAX(trans_date), @creditNoteType, MAX(HUID(cn.sale_uuid)), 0
   FROM credit_note_migration cnm JOIN bhima.credit_note cn ON cnm.description = cn.description
-  GROUP BY trans_id;
+    JOIN credit_note_uuids AS cnu ON cnm.trans_id = cnu.trans_id
+  GROUP BY cnm.trans_id;
 
 INSERT INTO voucher_item (uuid, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
   SELECT HUID(UUID()), cnm.account_id, cnm.debit, cnm.credit, v.uuid, HUID(cn.sale_uuid), HUID(cn.debitor_uuid)
   FROM credit_note_migration cnm JOIN bhima.credit_note cn ON cnm.description = cn.description
-    JOIN voucher v ON cnm.description = v.description;
+    JOIN voucher v ON cnm.description = v.description
+  WHERE v.type_id = @creditNoteType;
 
-ALTER TABLE credit_note_migration ADD COLUMN voucher_uuid BINARY(16);
-UPDATE credit_note_migration cdm JOIN voucher_item vi ON cdm.account_id = vi.account_id AND cdm.debit = vi.debit AND cdm.credit = vi.credit SET cdm.voucher_uuid = vi.voucher_uuid;
-
-UPDATE posting_journal gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
-UPDATE general_ledger gl JOIN credit_note_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
+UPDATE posting_journal gl JOIN credit_note_uuids cnu ON gl.trans_id = cnu.trans_id SET gl.record_uuid = cnu.uuid WHERE gl.transaction_type_id = @creditNoteType;
+UPDATE general_ledger gl JOIN credit_note_uuids cnu ON gl.trans_id = cnu.trans_id SET gl.record_uuid = cnu.uuid WHERE gl.transaction_type_id = @creditNoteType;
 
 DROP TABLE credit_note_migration;
+DROP TABLE credit_note_uuids;
 
 COMMIT;
 
