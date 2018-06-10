@@ -166,7 +166,8 @@ INSERT INTO `transaction_type` (`id`, `text`, `type`, `fixed`) VALUES
   (14, 'VOUCHERS.SIMPLE.STOCK_ENTRY', 'other', 1),
   (15, 'VOUCHERS.SIMPLE.COMMITMENT', 'other', 1),
   (16, 'VOUCHERS.SIMPLE.EMPLOYEE_WITHHOLDINGS', 'other', 1),
-  (17, 'VOUCHERS.SIMPLE.CHARGE_REMUNERATION', 'other', 1);
+  (17, 'VOUCHERS.SIMPLE.CHARGE_REMUNERATION', 'other', 1),
+  (18, 'VOUCHERS.SIMPLE.ADJUSTMENT', 'other', 1);
 
 -- Stock Movement Flux
 INSERT INTO `flux` VALUES
@@ -206,7 +207,7 @@ INSERT INTO `paiement_status` (`id`, `text`) VALUES
   (5,  'PAYROLL_STATUS.PAID');
 
 -- locations (default enterprise location only)
-/* 
+/*
 INSERT INTO `country` VALUES (HUID('dbe330b6-5cde-4830-8c30-dc00eccd1a5f'),'République Démocratique du Congo');
 INSERT INTO `province` VALUES (HUID('f6fc7469-7e58-45cb-b87c-f08af93edade'),'Kinshasa', HUID('dbe330b6-5cde-4830-8c30-dc00eccd1a5f'));
 INSERT INTO `sector` VALUES (HUID('0404e9ea-ebd6-4f20-b1f8-6dc9f9313450'),'Lukunga', HUID('f6fc7469-7e58-45cb-b87c-f08af93edade'));

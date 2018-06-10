@@ -118,9 +118,9 @@ UPDATE sector SET province_uuid = @BA_UUID_NEW WHERE province_uuid = @BA_UUID_OL
 DELETE FROM province WHERE uuid IN (@KO_UUID_OLD, @BA_UUID_OLD);
 
 /* VILLAGE */
+ALTER TABLE village DROP KEY `village_1`;
 INSERT INTO village (`uuid`, name, sector_uuid)
-SELECT HUID(`uuid`), name, HUID(sector_uuid) FROM bhima.village
-  ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.village.`uuid`), name = bhima.village.name;
+SELECT HUID(`uuid`), name, HUID(sector_uuid) FROM bhima.village;
 
 /*
 Merge duplicate sectors
@@ -285,13 +285,20 @@ account types based on account class.
 First we eliminate duplicates from the accounts.  We do this by appending random
 text to the label and prepending 9 to the account number.
 */
+CREATE TEMPORARY TABLE account_migration AS SELECT * FROM account;
+-- hard to remove accounts, never used.
+DELETE FROM account_migration WHERE id IN (3967, 3968, 3944);
+
+CREATE TEMPORARY TABLE account_number_dupes AS
+  SELECT MIN(id) AS id FROM account_migration GROUP BY account_number HAVING COUNT(account_number) > 1;
+
+-- prepend "9" to account number to make them unique
+UPDATE account_migration SET account_number = CONCAT('9', account_number) WHERE id IN (SELECT id FROM account_number_dupes);
 
 -- SELECT account_number from account GROUP BY account_number HAVING COUNT(account_number) = 2;
-ALTER TABLE account DROP KEY `account_1`;
 INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked, hidden, cc_id, pc_id, created, classe, reference_id)
-  SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, locked, IF(is_ohada, 0, 1), cc_id, pc_id, created, classe, reference_id FROM bhima.account
-ON DUPLICATE KEY UPDATE id = bhima.account.id, number = bhima.account.account_number, label = bhima.account.account_txt, parent = bhima.account.parent;
--- ALTER TABLE account ADD UNIQUE KEY `account_1` (`number`);
+  SELECT id, account_type_id, enterprise_id, account_number, account_txt, parent, locked, IF(is_ohada, 0, 1), cc_id, pc_id, created, classe, reference_id
+  FROM account_migration;
 
 /*
 First, we treat the title accounts.  These are any accounts with children, and
@@ -518,6 +525,17 @@ COMMIT;
 -- drop the FULLTEXT index for a perf boost
 ALTER TABLE `patient` DROP KEY `display_name`;
 
+CREATE TABLE patient_migration AS SELECT * FROM patient;
+
+DELETE FROM patient_migration WHERE debitor_uuid = 'e27aecd1-5122-4c34-8aa6-1187edc8e597';
+UPDATE patient_migration SET hospital_no = REPLACE(hospital_no, ' ', '');
+UPDATE patient_migration SET hospital_no = CONCAT('BH-', HEX(RAND() * 100000000000000)) WHERE hospital_no IS NULL OR hospital_no = "0";
+
+CREATE TEMPORARY TABLE patient_hospital_no_dupes AS
+  SELECT hospital_no, max(reference) AS reference FROM patient_migration GROUP BY hospital_no HAVING COUNT(hospital_no) > 1;
+
+DELETE FROM patient_migration INNER JOIN patient_hospital_no_dupes ph ON patient_migration.hospital_no = ph.hospital_no WHERE pm.reference = ph.reference;
+
 /*!40000 ALTER TABLE `patient` DISABLE KEYS */;
 INSERT INTO patient (
   `uuid`, project_id, reference, debtor_uuid, display_name, dob, dob_unknown_date, father_name, mother_name,
@@ -529,9 +547,8 @@ SELECT
   HUID(`uuid`), project_id, reference, HUID(debitor_uuid), IFNULL(CONCAT(first_name, ' ', last_name, ' ', middle_name), 'Unknown'), dob, 0, father_name, mother_name,
   profession, employer, spouse, spouse_profession, spouse_employer, sex, religion, marital_status,
   phone, email, address_1, address_2, IF(registration_date = 0, CURRENT_DATE(), registration_date), HUID(origin_location_id), HUID(current_location_id),
-  title, notes, REPLACE(hospital_no, ' ', ''), NULL, 1000, NULL, NULL, IF(registration_date = 0, CURRENT_DATE(), registration_date)
-FROM bhima.patient WHERE bhima.patient.debitor_uuid <> 'e27aecd1-5122-4c34-8aa6-1187edc8e597'
-ON DUPLICATE KEY UPDATE `uuid` = HUID(bhima.patient.uuid);
+  title, notes, hospital_no, NULL, 1000, NULL, NULL, IF(registration_date = 0, CURRENT_DATE(), registration_date)
+FROM patient_migration;
 /*!40000 ALTER TABLE `patient` ENABLE KEYS */;
 
 COMMIT;
