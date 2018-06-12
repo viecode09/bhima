@@ -96,8 +96,6 @@ INSERT INTO currency (id, name, format_key, symbol, note, min_monentary_unit)
 INSERT INTO country (`uuid`, name)
   SELECT HUID(`uuid`), country_fr FROM bhima.country;
 
-COMMIT;
-
 /*
 Migrate provinces.  We have two duplicates - Bandundu and Kasai Oriental
 provinces.  We will remove them in a migration temporary table.
@@ -122,8 +120,6 @@ INSERT INTO province (`uuid`, name, country_uuid)
   SELECT HUID(`uuid`), name, HUID(country_uuid) FROM migrate_province;
 
 DROP TABLE migrate_province;
-
-COMMIT;
 
 /* SECTOR */
 CREATE TEMPORARY TABLE migrate_sector AS
@@ -228,8 +224,6 @@ INSERT INTO exchange_rate (id, enterprise_id, currency_id, rate, `date`)
 -- delete future exchange rates
 DELETE FROM exchange_rate WHERE DATE(`date`) > DATE(NOW());
 
-COMMIT;
-
 /* FISCAL YEAR */
 /*
   WARNING: USE OF bhima_test HERE, PLEASE USE THE NAME OF NEW DATABASE USED
@@ -253,8 +247,6 @@ NOTE: These are the distributions of data in the transct3
 DELETE FROM transaction_type;
 INSERT INTO transaction_type (id, `text`, type, fixed)
   SELECT id, service_txt, service_txt, 1 FROM bhima.transaction_type;
-
-COMMIT;
 
 /* COST CENTER */
 INSERT INTO cost_center (project_id, id, `text`, note, is_principal)
@@ -286,8 +278,6 @@ INSERT INTO period (id, fiscal_year_id, `number`, start_date, end_date)
   type links to point to the correct account types.
 */
 
-COMMIT;
-
 /* REFERENCE */
 INSERT INTO reference (id, is_report, ref, `text`, `position`, `reference_group_id`, `section_resultat_id`)
   SELECT id, is_report, ref, `text`, `position`, `reference_group_id`, `section_resultat_id` FROM bhima.reference;
@@ -318,7 +308,6 @@ INSERT INTO account (id, type_id, enterprise_id, `number`, label, parent, locked
 
 DROP TABLE account_migration;
 
-COMMIT;
 /*
 First, we treat the title accounts.  These are any accounts with children, and
 all accounts with the previous title type.
@@ -355,8 +344,6 @@ UPDATE account SET type_id = @asset WHERE id NOT IN (SELECT id FROM title_accoun
 
 DROP TABLE title_accounts;
 
-COMMIT;
-
 CREATE TEMPORARY TABLE `inventory_group_dupes` AS
   SELECT COUNT(code) as N, code FROM bhima.inventory_group GROUP BY code HAVING COUNT(code) > 1;
 
@@ -370,8 +357,6 @@ INSERT INTO inventory_group (`uuid`, name, code, sales_account, cogs_account, st
   SELECT HUID(`uuid`), name, CONCAT(code, FLOOR(RAND() * 10000)) , sales_account, cogs_account, stock_account, donation_account, 1, 0
   FROM bhima.inventory_group
   WHERE code IN (SELECT code from inventory_group_dupes);
-
-COMMIT;
 
 /* INVENTORY UNIT */
 DELETE FROM inventory_unit;
@@ -404,8 +389,6 @@ INSERT INTO inventory (enterprise_id, `uuid`, code, `text`, price, default_quant
 
 DROP TABLE inventory_dupes;
 
-COMMIT;
-
 /* PRICE LIST */
 INSERT INTO price_list (`uuid`, enterprise_id, label, description, created_at, updated_at)
   SELECT HUID(`uuid`), enterprise_id, title, description, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
@@ -419,8 +402,6 @@ INSERT INTO price_list (`uuid`, enterprise_id, label, description, created_at, u
 SET @conventionPriceList = HUID('fbcedd3e-9b6c-4cb3-aa46-7c6b04df32d9');
 INSERT INTO price_list_item (`uuid`, `inventory_uuid`, `price_list_uuid`, `label`, `value`, `is_percentage`)
  SELECT HUID(UUID()), inventory.uuid, @conventionPriceList, 'Liste pour les Conventions', 100, 1 FROM inventory;
-
-COMMIT;
 
 /* DEBTOR GROUP */
 INSERT INTO debtor_group (enterprise_id, `uuid`, name, account_id, location_id, phone, email, note, locked, max_credit, is_convention, price_list_uuid, apply_discounts, apply_invoicing_fees, apply_subsidies, created_at, updated_at)
@@ -494,6 +475,10 @@ INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_i
   FROM sale_migration;
 /*!40000 ALTER TABLE `invoice` ENABLE KEYS */;
 
+CREATE TEMPORARY TABLE reversed_invoices AS SELECT HUID(sale_uuid) AS `uuid` FROM bhima.credit_note;
+ALTER TABLE reversed_invoices ADD INDEX `uuid` (`uuid`);
+UPDATE invoice SET reversed = 1 WHERE invoice.uuid IN (SELECT uuid FROM reversed_invoices);
+
 /* INVOICE ITEM */
 /*
   SELECT JUST invoice_item for invoice who exist
@@ -501,25 +486,25 @@ INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_i
 */
 
 CREATE TEMPORARY TABLE temp_sale_item AS
-  SELECT HUID(sale_uuid) AS sale_uuid, HUID(bhima.sale_item.`uuid`) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
-FROM bhima.sale_item JOIN sale_record_map ON HUID(bhima.sale_item.sale_uuid) = sale_record_map.uuid;
+  SELECT HUID(sale_uuid) AS sale_uuid, HUID(sale_item.uuid) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
+FROM bhima.sale_item;
 
 /* remove the unique key for boosting the insert operation */
 /*!40000 ALTER TABLE `invoice_item` DISABLE KEYS */;
+
+-- FIXME(@jniles) - this works for the import, but on the long run we should migrate their old frais inventory items.
+ALTER TABLE invoice_item DROP KEY `invoice_item_1`;
 INSERT INTO invoice_item (invoice_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit)
   SELECT sale_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit FROM temp_sale_item;
 /*!40000 ALTER TABLE `invoice_item` ENABLE KEYS */;
-
-COMMIT;
 
 /* POSTING JOURNAL*/
 /*
   NOTE: CONVERT DOC_NUM TO RECORD_UUID
 */
 INSERT INTO posting_journal (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
-  SELECT HUID(uuid), project_id, bhima.posting_journal.fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), IFNULL(doc_num, HUID(UUID())), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP() FROM bhima.posting_journal JOIN bhima.period ON bhima.period.id = bhima.posting_journal.period_id;
-
-COMMIT;
+  SELECT HUID(uuid), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
+  FROM bhima.posting_journal;
 
 -- TODO - deal with this in a better way
 -- account for data corruption (modifies HBB's dataset!)
@@ -532,9 +517,8 @@ UPDATE bhima.general_ledger SET deb_cred_uuid = NULL WHERE LEFT(deb_cred_uuid, 1
   WE WILL USE 8d344ed2-5db0-11e8-8061-54e1ad7439c7 AS UUID
 */
 INSERT INTO general_ledger (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
-  SELECT HUID(`uuid`), project_id, bhima.general_ledger.fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), IFNULL(doc_num, HUID(UUID())), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP() FROM bhima.general_ledger JOIN bhima.period ON bhima.period.id = bhima.general_ledger.period_id;
-
-COMMIT;
+  SELECT HUID(`uuid`), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
+  FROM bhima.general_ledger;
 
 UPDATE general_ledger gl JOIN sale_record_map srm ON gl.trans_id = srm.trans_id SET gl.record_uuid = srm.uuid;
 UPDATE posting_journal pj JOIN sale_record_map srm ON pj.trans_id = srm.trans_id SET pj.record_uuid = srm.uuid;
@@ -542,8 +526,6 @@ UPDATE posting_journal pj JOIN sale_record_map srm ON pj.trans_id = srm.trans_id
 /* PERIOD TOTAL */
 INSERT INTO period_total (enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked)
 SELECT enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked FROM bhima.period_total;
-
-COMMIT;
 
 /* PATIENT */
 /*
@@ -597,8 +579,6 @@ FROM patient_migration;
 
 DROP TABLE patient_migration;
 
-COMMIT;
-
 /* CASH_BOX */
 
 INSERT INTO cash_box (id, label, project_id, is_auxiliary)
@@ -608,8 +588,6 @@ INSERT INTO cash_box (id, label, project_id, is_auxiliary)
 INSERT INTO cash_box_account_currency (id, currency_id, cash_box_id, account_id, transfer_account_id)
   SELECT id, currency_id, cash_box_id, account_id, virement_account_id FROM bhima.cash_box_account_currency;
 
-COMMIT;
-
 -- filter for the cash table
 
 /* CASH */
@@ -617,43 +595,6 @@ COMMIT;
   c54a8769-3e4f-4899-bc43-ef896d3919b3 is a deb_cred_uuid with type D which doesn't exist in the debitor table in 1.x
   with as cash uuid 524475fb-9762-4051-960c-e5796a14d300
 */
-
--- select project_id, reference, count(reference) n from cash GROUP BY project_id, reference HAVING n > 1;
-CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash;
-ALTER TABLE cash_migrate ADD INDEX `uuid` (`uuid`);
-
--- we have duplicate references to clean up
-CREATE TEMPORARY TABLE cash_reference_dupes AS
-  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM cash_migrate GROUP BY project_id, reference HAVING COUNT(reference) > 1;
-
-SET @c = (SELECT max(reference) FROM cash_migrate);
-UPDATE cash_reference_dupes SET n = (@c := @c + 1);
-
--- choose one project at random to shift up.  We will use HBB
-UPDATE cash_migrate cm JOIN cash_reference_dupes cd ON cm.uuid = cd.uuid SET cm.reference = cd.n;
-
-INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
-  SELECT HUID(cm.uuid), cm.project_id, cm.reference, cm.`date`, HUID(cm.deb_cred_uuid), cm.currency_id, cm.cost, cm.user_id, cm.cashbox_id, cm.description, cm.is_caution, IF(bhima.cash_discard.`uuid` IS NULL, 0, 1), 0, CURRENT_TIMESTAMP()
-  FROM cash_migrate cm LEFT JOIN bhima.cash_discard ON bhima.cash_discard.cash_uuid = cm.uuid;
-
-/* CASH ITEM */
-/*
-  skipped cash 524475fb-9762-4051-960c-e5796a14d30
-*/
-INSERT INTO cash_item (`uuid`, cash_uuid, amount, invoice_uuid)
-  SELECT HUID(`uuid`), HUID(cash_uuid), allocated_cost, HUID(invoice_uuid) FROM bhima.cash_item;
-
-CREATE TEMPORARY TABLE `cash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
-INSERT INTO `cash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
-
-UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
-UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
-
-DROP TABLE cash_reference_dupes;
-DROP TABLE cash_migrate;
-
-COMMIT;
-
 /* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
 /*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
 /*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
@@ -712,24 +653,12 @@ INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, docum
 DROP TABLE combined_ledger;
 DROP TABLE migrate_primary_cash_item;
 
-COMMIT;
+ALTER TABLE pci_ledger MODIFY `trans_id` TEXT CHARACTER SET utf8 COLLATE utf8_general_ci;
 
 UPDATE general_ledger gl JOIN pci_ledger l ON gl.trans_id = l.trans_id SET gl.record_uuid = l.uuid;
 UPDATE posting_journal pj JOIN pci_ledger l ON pj.trans_id = l.trans_id SET pj.record_uuid = l.uuid;
 
 DROP TABLE pci_ledger;
-
-COMMIT;
-
-/*
-Hack hack hack
-
-This corrects values that were not updated for some reason in their reports :/
-*/
-UPDATE general_ledger gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
-UPDATE posting_journal gl JOIN project p ON gl.project_id = p.id JOIN enterprise e ON p.enterprise_id = e.id SET credit_equiv = credit, debit_equiv = debit WHERE gl.currency_id = e.currency_id;
-
-COMMIT;
 
 /*
 Linking - Journal/General Ledger
@@ -782,15 +711,22 @@ INSERT INTO voucher_item (uuid, account_id, debit, credit, voucher_uuid, documen
   FROM cash_discard_migration cdm JOIN bhima.cash_discard cd ON cdm.description = cd.description
     JOIN voucher v ON cdm.description = v.description;
 
-ALTER TABLE cash_discard_migration ADD COLUMN voucher_uuid BINARY(16);
-UPDATE cash_discard_migration cdm JOIN voucher_item vi ON cdm.account_id = vi.account_id AND cdm.debit = vi.debit AND cdm.credit = vi.credit SET cdm.voucher_uuid = vi.voucher_uuid;
-
-UPDATE posting_journal gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
-UPDATE general_ledger gl JOIN cash_discard_migration cdm ON gl.trans_id = cdm.trans_id SET gl.record_uuid = cdm.voucher_uuid WHERE gl.transaction_type_id = @typeCashDiscard;
-
 DROP TABLE cash_discard_migration;
 
-COMMIT;
+-- update links
+CREATE TEMPORARY TABLE voucher_map AS SELECT uuid, description FROM voucher WHERE type_id = @typeCashDiscard;
+CREATE TEMPORARY TABLE voucher_trans_map AS
+  SELECT MAX(vm.uuid) uuid, MAX(vm.description) description, gl.trans_id
+  FROM posting_journal gl JOIN voucher_map vm ON gl.description = vm.description
+  GROUP BY gl.trans_id;
+
+INSERT INTO voucher_trans_map
+  SELECT MAX(vm.uuid) uuid, MAX(vm.description) description, gl.trans_id FROM
+  general_ledger gl JOIN voucher_map vm ON gl.description = vm.description
+  GROUP BY gl.trans_id;
+
+UPDATE posting_journal gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vm.uuid;
+UPDATE general_ledger gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vm.uuid;
 
 /*
 Vouchers - Create Reversals for Invoices (Credit Notes)
@@ -829,13 +765,52 @@ UPDATE general_ledger gl JOIN credit_note_uuids cnu ON gl.trans_id = cnu.trans_i
 DROP TABLE credit_note_migration;
 DROP TABLE credit_note_uuids;
 
-COMMIT;
-
 INSERT INTO patient_group
   SELECT HUID(`uuid`), enterprise_id, HUID(`price_list_uuid`), name, IFNULL(note, ""), created FROM bhima.patient_group;
 
 INSERT IGNORE INTO patient_assignment
   SELECT HUID(`uuid`), HUID(patient_group_uuid), HUID(patient_uuid) FROM bhima.assignation_patient;
+
+-- WARNING: cash is last because it takes the longest
+-- select project_id, reference, count(reference) n from cash GROUP BY project_id, reference HAVING n > 1;
+CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash ORDER BY bhima.cash.uuid;
+ALTER TABLE cash_migrate ADD INDEX `uuid` (`uuid`);
+
+-- we have duplicate references to clean up
+CREATE TEMPORARY TABLE cash_reference_dupes AS
+  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM cash_migrate GROUP BY project_id, reference HAVING COUNT(reference) > 1;
+
+SET @c = (SELECT max(reference) FROM cash_migrate);
+UPDATE cash_reference_dupes SET n = (@c := @c + 1);
+
+-- choose one project at random to shift up.  We will use HBB
+UPDATE cash_migrate cm JOIN cash_reference_dupes cd ON cm.uuid = cd.uuid SET cm.reference = cd.n;
+
+CREATE TEMPORARY TABLE reversed_cash_payments AS SELECT HUID(cash_uuid) AS `uuid` FROM bhima.cash_discard;
+ALTER TABLE reversed_cash_payments ADD INDEX `uuid` (`uuid`);
+
+INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
+  SELECT HUID(cm.uuid), cm.project_id, cm.reference, cm.`date`, HUID(cm.deb_cred_uuid), cm.currency_id, cm.cost, cm.user_id, cm.cashbox_id, cm.description, cm.is_caution, 0, 0, CURRENT_TIMESTAMP()
+  FROM cash_migrate cm;
+
+UPDATE cash SET reversed = 1 WHERE cash.uuid IN (SELECT uuid from reversed_cash_payments);
+
+/* CASH ITEM */
+/*
+  skipped cash 524475fb-9762-4051-960c-e5796a14d30
+*/
+INSERT INTO cash_item (`uuid`, cash_uuid, amount, invoice_uuid)
+  SELECT HUID(`uuid`), HUID(cash_uuid), allocated_cost, HUID(invoice_uuid) FROM bhima.cash_item;
+
+CREATE TEMPORARY TABLE `cash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
+INSERT INTO `cash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
+
+UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
+UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
+
+DROP TABLE cash_reference_dupes;
+DROP TABLE cash_migrate;
+
 
 COMMIT;
 
@@ -857,5 +832,3 @@ CALL ComputePeriodZero(2015);
 CALL ComputePeriodZero(2016);
 CALL ComputePeriodZero(2017);
 CALL ComputePeriodZero(2018);
-
-COMMIT;
