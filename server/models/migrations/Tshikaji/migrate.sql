@@ -43,6 +43,10 @@ SET unique_checks=0;
 Useful Functions/ Procedures
 */
 
+DROP PROCEDURE IF EXISTS MergeSector;
+DROP PROCEDURE IF EXISTS VouchersFromTransactionTypeGL;
+DROP PROCEDURE IF EXISTS VouchersFromTransactionTypePJ;
+
 DELIMITER $$
 
 CREATE PROCEDURE MergeSector(
@@ -55,104 +59,193 @@ CREATE PROCEDURE MergeSector(
   DELETE FROM sector WHERE sector.uuid = HUID(beforeUuid);
 END $$
 
-CREATE PROCEDURE ComputePeriodZero(
-  IN year INT
-) BEGIN
-  DECLARE fyId INT;
-  DECLARE previousFyId INT;
-  DECLARE enterpriseId INT;
-  DECLARE periodZeroId INT;
+-- Purchase Status
+INSERT INTO `purchase_status` (`id`, `text`) VALUES
+  (1,  'PURCHASES.STATUS.WAITING_CONFIRMATION'),
+  (2,  'PURCHASES.STATUS.CONFIRMED'),
+  (3,  'PURCHASES.STATUS.RECEIVED'),
+  (4,  'PURCHASES.STATUS.PARTIALLY_RECEIVED'),
+  (5,  'PURCHASES.STATUS.CANCELLED');
 
-  SELECT id, previous_fiscal_year_id, enterprise_id
-    INTO fyId, previousFyId, enterpriseId
-  FROM fiscal_year WHERE YEAR(start_date) = year;
+-- Paiement Status
+INSERT INTO `paiement_status` (`id`, `text`) VALUES
+  (1,  'PAYROLL_STATUS.WAITING_FOR_CONFIGURATION'),
+  (2,  'PAYROLL_STATUS.CONFIGURED'),
+  (3,  'PAYROLL_STATUS.WAITING_FOR_PAYMENT'),
+  (4,  'PAYROLL_STATUS.PARTIALLY_PAID'),
+  (5,  'PAYROLL_STATUS.PAID');
 
-  SET periodZeroId = CONCAT(year, 0);
+-- Stock Movement Flux
+INSERT INTO `flux` VALUES
+  (1,  'STOCK_FLUX.FROM_PURCHASE'),
+  (2,  'STOCK_FLUX.FROM_OTHER_DEPOT'),
+  (3,  'STOCK_FLUX.FROM_ADJUSTMENT'),
+  (4,  'STOCK_FLUX.FROM_PATIENT'),
+  (5,  'STOCK_FLUX.FROM_SERVICE'),
+  (6,  'STOCK_FLUX.FROM_DONATION'),
+  (7,  'STOCK_FLUX.FROM_LOSS'),
+  (8,  'STOCK_FLUX.TO_OTHER_DEPOT'),
+  (9,  'STOCK_FLUX.TO_PATIENT'),
+  (10, 'STOCK_FLUX.TO_SERVICE'),
+  (11, 'STOCK_FLUX.TO_LOSS'),
+  (12, 'STOCK_FLUX.TO_ADJUSTMENT'),
+  (13, 'STOCK_FLUX.FROM_INTEGRATION');
 
-  -- UPDATE period SET start_date = DATE(CONCAT(year, '-01-01')) AND end_date = DATE(CONCAT(year, '-01-01'));
+INSERT INTO `actions`(`id`, `description`) VALUES
+  (1, 'FORM.LABELS.CAN_EDIT_ROLES');
 
-  INSERT INTO period_total (enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked)
-    SELECT enterpriseId, fyId, periodZeroId, account_id, SUM(credit), SUM(debit), 0
-    FROM period_total
-    WHERE fiscal_year_id = previousFyId
-    GROUP BY account_id;
-END $$
+-- Supported Languages
+INSERT INTO `language` VALUES
+  (1,'Francais','fr', 'fr-be'),
+  (2,'English','en', 'en-us');
+
+-- units
+INSERT INTO unit VALUES
+  (0,   'Root','TREE.ROOT','The unseen root node',NULL,'/modules/index.html','/root'),
+  (1,   'Admin','TREE.ADMIN','The Administration Super-Category',0,'/modules/admin/index.html','/ADMIN_FOLDER'),
+  (2,   'Enterprise', 'TREE.ENTERPRISE', 'Manage the registered enterprises from here', 1, '/modules/enterprise/', '/enterprises'),
+  (3,   'Invoice Registry','TREE.INVOICE_REGISTRY','Invoice Registry',5,'/modules/invoices/registry/','/invoices'),
+  (4,   'Users & Permissions','TREE.USERS','Manage user privileges and permissions',1,'/modules/users/','/users'),
+  (5,   'Finance','TREE.FINANCE','The Finance Super-Category',0,'/modules/finance/','/FINANCE_FOLDER'),
+  (6,   'Account','TREE.ACCOUNT','Chart of Accounts management',5,'/modules/accounts/','/accounts'),
+  (9,   'Posting Journal','TREE.POSTING_JOURNAL','Daily Log',5,'/modules/journal/','/journal'),
+  (10,  'General Ledger','TREE.GENERAL_LEDGER','Posted Journal Data', 5,'/modules/general_ledger/','/general_ledger'),
+  (12,  'Hospital','TREE.HOSPITAL','The Hospital Super-Category',0,'/modules/hospital/index.html','/HOSPITAL_FOLDER'),
+  (13,  'Fiscal Year','TREE.FISCAL_YEAR','Fiscal year configuration page',5,'/modules/fiscal/','/fiscal'),
+  (14,  'Patient Registration','TREE.PATIENT_REGISTRATION','Register patients',12,'/modules/patient/register/','/patients/register'),
+  (15,  'Patient Registry','TREE.PATIENT_REGISTRY','Patient Registry',12,'/modules/patients/registry/','/patients'),
+  (16,  'Patient Invoice','TREE.PATIENT_INVOICE','Create an invoice for a patient',5,'/modules/patient_invoice/','/invoices/patient'),
+  (18,  'Cash Window','TREE.CASH_WINDOW','Cash payments against past or future invoices',5,'/modules/cash/','/cash'),
+  (19,  'Register Supplier','TREE.REGISTER_SUPPLIER','',1,'/modules/suppliers/','/suppliers'),
+  (20,  'Depot Management','TREE.DEPOTS','',0,'/modules/depots/','/DEPOT_FOLDER'),
+  (21,  'Price List','TREE.PRICE_LIST','Configure price lists!',1,'/modules/prices/','/prices'),
+  (26,  'Location Manager','TREE.LOCATION','',1,'/modules/locations/locations.html','/locations'),
+  (29,  'Patient Group','TREE.PATIENT_GRP','',1,'/modules/patients/groups/','/patients/groups'),
+  (48,  'Service Management','TREE.SERVICE','',1,'modules/services/','/services'),
+  (57,  'Humans Ressources','TREE.HUMANS_RESSOURCES','',0,'modules/payroll/','/PAYROLL_FOLDER'),
+  (61,  'Employee','TREE.EMPLOYEE','Employees Registration',57,'modules/employees/register/','/employees/register'),
+  (62,  'Employee Registry','TREE.EMPLOYEE_REGISTRY','Employee Registry',57,'/modules/payroll/registry/','/employees'),
+  (82,  'Subsidies','TREE.SUBSIDY','Handles the subsidy situation',1,'/modules/subsidies/','/subsidies'),
+  (105, 'Cashbox Management','TREE.CASHBOX_MANAGEMENT','',1,'/modules/cash/cashbox/','/cashboxes'),
+  (107, 'Debtor Groups Management', 'TREE.DEBTOR_GROUP', 'Debtor Groups Management module', 1, '/modules/debtors/groups/', '/debtors/groups'),
+  (134, 'Simple Journal Vouchers', 'TREE.SIMPLE_VOUCHER', 'Creates a simple transfer slip between two accounts', 5, '/modules/vouchers/simple', '/vouchers/simple'),
+  (135, 'Invoicing Fee', 'TREE.INVOICING_FEES', 'Configures invoicing Fee for bhima', 1, '/modules/invoicing_fees', '/invoicing_fees'),
+  (137, 'Complex Journal Vouchers', 'TREE.COMPLEX_JOURNAL_VOUCHER', 'Complex Journal vouchers module', 5, '/modules/vouchers/complex', '/vouchers/complex'),
+  (138, 'Inventory Module', 'TREE.INVENTORY', 'Inventory management module', 0, '/modules/inventory/index', '/INVENTORY_FOLDER'),
+  (139, 'Inventory Registry', 'TREE.INVENTORY_REGISTRY', 'Inventory Registry module', 138, '/modules/inventory/list', '/inventory'),
+  (140, 'Inventory Configurations', 'TREE.INVENTORY_CONFIGURATION', 'Inventory configuration module', 138, '/modules/inventory/configuration', '/inventory/configuration'),
+  (141, 'Vouchers Records', 'TREE.VOUCHER_REGISTRY', 'Vouchers registry module', 5, '/modules/vouchers/index', '/vouchers'),
+  -- (142, 'Purchase Orders', 'TREE.PURCHASING', 'This module is responsible for creating purchase orders', 138, '/modules/purchases/create', '/purchases/create'),
+  (143, 'Transaction Type Module', 'TREE.TRANSACTION_TYPE', 'This module is responsible for managing transaction type', 1, '/modules/transaction-type', '/transaction_type'),
+  (144, 'Reports (Finance)', 'TREE.REPORTS', 'A folder holding all finance reports', 0, '/modules/finance/reports', '/finance/REPORT_FOLDER'),
+  (145, 'Cashflow', 'TREE.CASHFLOW', 'The Cashflow Report', 144, '/modules/reports/cashflow', '/reports/cashflow'),
+  -- (148, 'Chart of Accounts', 'REPORT.CHART_OF_ACCOUNTS', 'The COA Report', 144, '/modules/finance/chart_of_accounts', '/reports/accounts_chart'),
+  (146, 'Creditor Groups Management', 'TREE.CREDITOR_GROUP', 'Creditor Groups Management module', 1, '/modules/creditor-groups/', '/creditors/groups'),
+  (147, 'Cash Payment Registry', 'TREE.CASH_PAYMENT_REGISTRY', 'Cash Payment Registry', 5, '/modules/cash/payments/registry', '/payments'),
+  (149, 'Cash Report', 'TREE.CASH_REPORT', 'The Report of cash entry and exit', 144, '/modules/reports/cash_report', '/reports/cash_report'),
+  (150, 'Balance Report', 'TREE.BALANCE_REPORT', 'Balance report module', 144, '/modules/reports/balance_report', '/reports/balance_report'),
+  (151, 'Customer Debts', 'TREE.AGED_DEBTORS', 'Aged Debtors', 144, '/modules/reports/aged_debtors', '/reports/aged_debtors'),
+  (152, 'Account report', 'TREE.REPORT_ACCOUNTS', 'The Report accounts', 144, '/modules/reports/account_report', '/reports/account_report'),
+  (153, 'Report Cashflow by Service', 'TREE.CASHFLOW_BY_SERVICE', 'CashflowByService', 144, '/modules/reports/cashflowByService', '/reports/cashflowByService'),
+  (154, 'Purchase Order', 'TREE.PURCHASE_ORDER', 'Purchase order folder', 0, '/modules/purchase_order', '/PURCHASE_FOLDER'),
+  (155, 'Purchase', 'TREE.PURCHASE', 'The purchase module', 154, '/modules/purchase_order/purchase', '/purchases/create'),
+  (156, 'Purchase Registry', 'TREE.PURCHASE_REGISTRY', 'The purchase registry', 154, '/modules/purchase_order/registry', '/purchases'),
+  (157, 'Open Debtors', 'REPORT.OPEN_DEBTORS.TREE', 'Open Debtors', 144, '/modules/finance/open_debtors', '/reports/open_debtors'),
+  (159, 'Clients report', 'REPORT.CLIENTS_REPORT.TITLE', 'The Client report', 144, '/modules/reports/clients_report', '/reports/clients_report'),
+  (160, 'Stock', 'TREE.STOCK', 'The stock management module', 0, '/modules/stock', '/STOCK_FOLDER'),
+  (161, 'Stock Lots', 'TREE.STOCK_LOTS', 'The stock lots registry', 160, '/modules/stock/lots', '/stock/lots'),
+  (162, 'Stock Movements', 'TREE.STOCK_MOVEMENTS', 'The stock lots movements registry', 160, '/modules/stock/movements', '/stock/movements'),
+  (163, 'Stock Inventory', 'TREE.STOCK_INVENTORY', 'The stock inventory registry', 160, '/modules/stock/inventories', '/stock/inventories'),
+  (164, 'Stock Exit', 'STOCK.EXIT', 'The stock exit module', 160, '/modules/stock/exit', '/stock/exit'),
+  (165, 'Stock Entry', 'STOCK.ENTRY', 'The stock entry module', 160, '/modules/stock/entry', '/stock/entry'),
+  (167, 'Stock Adjustment', 'STOCK.ADJUSTMENT', 'The stock adjustment module', 160, '/modules/stock/adjustment', '/stock/adjustment'),
+  (168, 'Aged Creditors', 'TREE.AGED_CREDITORS', 'Aged Creditors', 144, '/modules/reports/aged_creditors', '/reports/aged_creditors'),
+  (170, 'Account Statement', 'TREE.ACCOUNT_STATEMENT', 'Account Statement Module', 5, '/modules/account_statement/', '/account_statement'),
+  (171, 'Balance Sheet Statement', 'TREE.BALANCE_SHEET', 'Balance Sheet Module', 144, '/modules/reports/balance_sheet_report/', '/reports/balance_sheet_report'),
+  (180, 'Income Expenses', 'TREE.INCOME_EXPENSE', 'The Report of income and expenses', 144, '/modules/finance/income_expense', '/reports/income_expense'),
+  (181, 'Stock Report', 'TREE.STOCK_REPORT', 'The Report of inventories in stock', 144, '/modules/reports/inventory_report', '/reports/inventory_report'),
+  (182, 'Stock File Report', 'TREE.STOCK_INVENTORY_REPORT', 'The Report of an inventory in stock', 144, '/modules/reports/inventory_file', '/reports/inventory_file'),
+  (183, 'Grade Management','TREE.GRADES','', 57,'/modules/grades/','/grades'),
+  (184, 'Job Title Management','TREE.PROFESSION','', 57,'/modules/functions/','/functions'),
+  (185, 'Payroll Rubric Management','TREE.PAYROLL_RUB_MANAGEMENT','', 57,'/modules/payroll/rubrics','/payroll/rubrics'),
+  (186, 'Holidays Management','TREE.HOLIDAYS_MANAGEMENT','Holidays Management',57,'/modules/holidays/','/holidays'),
+  (187, 'Offdays Management','TREE.OFFDAYS_MANAGEMENT','Offdays Management', 57,'/modules/offdays/','/offdays'),
+  (188, 'Tax IPR Management','TREE.IPR_MANAGEMENT','IPR Management',57,'/modules/ipr_tax/','/ipr_tax'),
+  (189, 'IPR Tax Configuration','TREE.IPR_TAX_CONFIGURATION','IPR Tax Configuration', 57,'/modules/ipr_tax/configuration','/ipr_tax/configuration'),
+  (190, 'Payroll Rubric Configuration','TREE.PAYROLL_RUB_CONFIGURATION','',57,'/modules/payroll/rubric_configuration','/payroll/rubric_configuration'),
+  (191, 'Account Configuration','TREE.PAYROLL_ACCOUNT_CONFIGURATION','Account Configuration', 57,'/modules/payroll/account_configuration','/payroll/account_configuration'),
+  (192, 'Operating report', 'TREE.OPERATING_ACCOUNT', 'The Report of operating', 144, '/modules/reports/operating', '/reports/operating'),
+  (193, 'Weekend Configuration','TREE.WEEKEND_CONFIGURATION','Weekend Configuration', 57,'/modules/payroll/weekend_configuration','/payroll/weekend_configuration'),
+  (194, 'Payroll Configuration','TREE.PAYROLL_CONFIGURATION','Payroll Configuration', 57,'/modules/payroll','/payroll'),
+  (195, 'Role management','TREE.ROLE_MANAGEMENT','Roles Management', 1,'/modules/role/','/roles'),
+  (196, 'Depot Registry','TREE.DEPOTS_REGISTRY','',20,'/modules/depots/','/depots'),
+  (197, 'Stock Exit Report','TREE.STOCK_EXIT_REPORT','Stock Exit Report', 144,'/modules/reports/generated/stock_exit','/reports/stock_exit'),
+  (199, 'Client Debtor Account Balance', 'REPORT.CLIENT_DEBTOR_ACCOUNT_BALANCE_REPORT', 'Client Debtor Account Balance', 144, '/modules/reports/debtor_accounts_balance', '/reports/debtorBalanceReport'),
+  (200, 'Multiple Payroll','TREE.MULTI_PAYROLL','Multiple Payroll', 57,'/modules/multiple_payroll','/multiple_payroll'),
+  (201, 'Employee Standing Report', 'TREE.EMPLOYEE_STANDING_REPORT', 'Employee Standing Report', 144, '/modules/reports/employeeStanding', '/reports/employeeStanding'),
+  (202, 'Patient Standing Report', 'TREE.PATIENT_STANDING_REPORT', 'Patient Standing Report', 144, '/modules/reports/patientStanding', '/reports/patientStanding');
+
+-- Reserved system account type
+INSERT INTO `account_category` VALUES
+  (1, 'income', 'ACCOUNT.TYPES.INCOME'),
+  (2, 'expense', 'ACCOUNT.TYPES.EXPENSE'),
+  (3, 'balance', 'ACCOUNT.TYPES.BALANCE'),
+  (4, 'title', 'ACCOUNT.TYPES.TITLE');
+
+-- Reserved system account category
+INSERT INTO `account_type` VALUES
+  (1, 'asset', 'ACCOUNT.TYPES.ASSET', 3),
+  (2, 'liability', 'ACCOUNT.TYPES.LIABILITY', 3),
+  (3, 'equity', 'ACCOUNT.TYPES.EQUITY', 3),
+  (4, 'income', 'ACCOUNT.TYPES.INCOME', 1),
+  (5, 'expense', 'ACCOUNT.TYPES.EXPENSE', 2),
+  (6, 'title', 'ACCOUNT.TYPES.TITLE', 4);
+
+-- core BHIMA reports
+INSERT INTO `report` (`id`, `report_key`, `title_key`) VALUES
+  (1, 'cashflow', 'TREE.CASHFLOW'),
+  (2, 'accounts_chart', 'REPORT.CHART_OF_ACCOUNTS'),
+  (3, 'income_expense', 'REPORT.INCOME_EXPENSE'),
+  (4, 'balance_report', 'REPORT.BALANCE'),
+  (5, 'aged_debtors', 'TREE.AGED_DEBTORS'),
+  (6, 'account_report', 'REPORT.REPORT_ACCOUNTS.TITLE'),
+  (7, 'cashflowByService', 'TREE.CASHFLOW_BY_SERVICE'),
+  (8, 'open_debtors', 'REPORT.OPEN_DEBTORS.TITLE'),
+  (9, 'clients_report','REPORT.CLIENTS'),
+  (10, 'aged_creditors','TREE.AGED_CREDITORS'),
+  (11, 'balance_sheet_report', 'REPORT.BALANCE_SHEET.TITLE'),
+  (12, 'cash_report', 'REPORT.CASH_REPORT'),
+  (13, 'inventory_report', 'REPORT.STOCK.TITLE'),
+  (14, 'inventory_file', 'REPORT.STOCK.INVENTORY_REPORT'),
+  (15, 'operating', 'TREE.OPERATING_ACCOUNT'),
+  (16, 'stock_exit', 'REPORT.STOCK.EXIT_REPORT'),
+  (17, 'debtorBalanceReport', 'REPORT.CLIENT_DEBTOR_ACCOUNT_BALANCE_REPORT'),
+  (18, 'employeeStanding', 'REPORT.EMPLOYEE_STANDING.TITLE'),
+  (19, 'patientStanding', 'REPORT.PATIENT_STANDING.TITLE');
 
 
--- NOTE: this uses 2.x's tables, not 1.x's
-CREATE PROCEDURE VouchersFromTransactionTypeGL(
-  IN transactionTypeId INT
-) BEGIN
-  CREATE TEMPORARY TABLE transactions AS
-    SELECT * FROM general_ledger WHERE transaction_type_id = transactionTypeId;
+/*
+CREATE TRIGGER patient_reference BEFORE INSERT ON patient
+FOR EACH ROW
+  SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(patient.reference) + 1, 1)) FROM patient WHERE patient.project_id = new.project_id);$$
 
-  CREATE TEMPORARY TABLE mapping AS
-    SELECT DISTINCT trans_id, HUID(UUID()) record_uuid FROM general_ledger WHERE transaction_type_id = transactionTypeId;
+CREATE TRIGGER invoice_reference BEFORE INSERT ON invoice
+FOR EACH ROW
+  SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(invoice.reference) + 1, 1)) FROM invoice WHERE invoice.project_id = new.project_id);$$
+*/
 
-  CREATE TEMPORARY TABLE stage_voucher AS
-    SELECT m.record_uuid, MAX(trans_date) date, MAX(project_id) project_id, NULL AS reference, MAX(currency_id) currency_id,
-      SUM(debit) amount, MAX(description) description, MAX(user_id) user_id, MAX(trans_date) created_at, transactionTypeId AS type_id
-      FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id
-      GROUP BY t.trans_id;
-
-  INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id)
-    SELECT record_uuid, date, project_id, reference, currency_id, amount, description, user_id, created_at, type_id
-    FROM stage_voucher;
-
-
-  INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-    SELECT HUID(UUID()), account_id, debit, credit, m.record_uuid, reference_uuid, entity_uuid
-    FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id;
-
-  UPDATE general_ledger gl JOIN mapping m ON gl.trans_id = m.trans_id SET gl.record_uuid = m.record_uuid WHERE transaction_type_id = transactionTypeId;
-
-  DROP TABLE transactions;
-  DROP TABLE mapping;
-  DROP TABLE stage_voucher;
-END $$
-
-CREATE PROCEDURE VouchersFromTransactionTypePJ(
-  IN transactionTypeId INT
-) BEGIN
-  CREATE TEMPORARY TABLE transactions AS
-    SELECT * FROM posting_journal WHERE transaction_type_id = transactionTypeId;
-
-  CREATE TEMPORARY TABLE mapping AS
-    SELECT DISTINCT trans_id, HUID(UUID()) record_uuid FROM posting_journal WHERE transaction_type_id = transactionTypeId;
-
-  CREATE TEMPORARY TABLE stage_voucher AS
-    SELECT m.record_uuid, MAX(trans_date) date, MAX(project_id) project_id, NULL AS reference, MAX(currency_id) currency_id,
-      SUM(debit) amount, MAX(description) description, MAX(user_id) user_id, MAX(trans_date) created_at, transactionTypeId AS type_id
-      FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id
-      GROUP BY t.trans_id;
-
-  INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id)
-    SELECT record_uuid, date, project_id, reference, currency_id, amount, description, user_id, created_at, type_id
-    FROM stage_voucher;
-
-
-  INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-    SELECT HUID(UUID()), account_id, debit, credit, m.record_uuid, reference_uuid, entity_uuid
-    FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id;
-
-  UPDATE posting_journal gl JOIN mapping m ON gl.trans_id = m.trans_id SET gl.record_uuid = m.record_uuid WHERE transaction_type_id = transactionTypeId;
-
-  DROP TABLE transactions;
-  DROP TABLE mapping;
-  DROP TABLE stage_voucher;
-END $$
+CREATE TRIGGER voucher_before_insert BEFORE INSERT ON voucher
+FOR EACH ROW
+  SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(voucher.reference) + 1, 1)) FROM voucher WHERE voucher.project_id = new.project_id);$$
 
 DELIMITER ;
 
-/* ALTER TABLE bhima.posting_journal ADD INDEX `inv_po_id` (`inv_po_id`); */
-/* ALTER TABLE bhima.general_ledger ADD INDEX `inv_po_id` (`inv_po_id`); */
 
 /* CURRENCY */
 
 /*
   WRONG NAME : min_monentary_unit instead of min_monentary_unit
 */
-DELETE FROM currency;
 INSERT INTO currency (id, name, format_key, symbol, note, min_monentary_unit)
   SELECT id, name, format_key, symbol, note, min_monentary_unit FROM bhima.currency;
 
@@ -217,6 +310,8 @@ CALL MergeSector('00712a73-694f-463e-b111-995871395bc1', '7d2740c1-aac9-40dc-846
 CALL MergeSector('c43d8e55-7a42-4fee-9378-a830c0f42b43', 'd96f7e9a-1917-493b-bce7-c55b601e98aa');
 CALL MergeSector('5d7ccadc-ddf6-41eb-93f7-a505e3280558', 'e2016756-76be-4ac9-a842-e39db81f251c');
 CALL MergeSector('0404e9ea-ebd6-4f20-b1f8-6dc9f9313450', '32fac9d5-843a-4503-b142-21a3396c6f50');
+
+DROP PROCEDURE MergeSector;
 
 /*
 We should also merge locations, but only once the entire database is built.
@@ -308,7 +403,6 @@ types are hard-coded "fixed" types.  These need to be handled manually.
 
 NOTE: These are the distributions of data in the transct3
 */
-DELETE FROM transaction_type;
 INSERT INTO transaction_type (id, `text`, type, fixed)
   SELECT id, service_txt, service_txt, 1 FROM bhima.transaction_type;
 
@@ -423,12 +517,10 @@ INSERT INTO inventory_group (`uuid`, name, code, sales_account, cogs_account, st
   WHERE code IN (SELECT code from inventory_group_dupes);
 
 /* INVENTORY UNIT */
-DELETE FROM inventory_unit;
 INSERT INTO inventory_unit (id, abbr, `text`)
   SELECT id, `text`, `text` FROM bhima.inventory_unit;
 
 /* INVENTORY TYPE */
-DELETE FROM inventory_type;
 INSERT INTO inventory_type (id, `text`)
   SELECT id, `text` FROM bhima.inventory_type;
 
@@ -492,6 +584,32 @@ INSERT INTO creditor (`uuid`, group_uuid, `text`)
 INSERT INTO service (id, `uuid`, enterprise_id, name, cost_center_id, profit_center_id)
   SELECT id, HUID(UUID()), 200, name, cost_center_id, profit_center_id FROM bhima.service;
 
+/**
+MIGRATE Posting Journal and General Ledger
+*/
+
+/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
+INSERT INTO posting_journal (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
+  SELECT HUID(uuid), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
+  FROM bhima.posting_journal;
+/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
+
+-- TODO - deal with this in a better way
+-- account for data corruption (modifies HBB's dataset!)
+UPDATE bhima.general_ledger SET deb_cred_uuid = NULL WHERE LEFT(deb_cred_uuid, 1) = '"';
+
+/* GENERAL LEDGER */
+/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
+INSERT INTO general_ledger (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
+  SELECT HUID(`uuid`), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
+  FROM bhima.general_ledger;
+/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
+
+/* PERIOD TOTAL */
+INSERT INTO period_total (enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked)
+SELECT enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked FROM bhima.period_total;
+
+
 
 /* INVOICE */
 /*
@@ -532,6 +650,7 @@ SET @s = (SELECT max(reference) FROM sale_migration);
 UPDATE sale_reference_dupes SET n = (@s := @s + 1);
 
 UPDATE sale_migration sm JOIN sale_reference_dupes sd ON sm.uuid = sd.uuid SET sm.reference = sd.n;
+DROP TABLE sale_reference_dupes;
 
 /*!40000 ALTER TABLE `invoice` DISABLE KEYS */;
 INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_id, user_id, `date`, description)
@@ -539,20 +658,17 @@ INSERT INTO invoice (project_id, reference, `uuid`, cost, debtor_uuid, service_i
   FROM sale_migration;
 /*!40000 ALTER TABLE `invoice` ENABLE KEYS */;
 
+DROP TABLE sale_migration;
+
 CREATE TEMPORARY TABLE reversed_invoices AS SELECT HUID(sale_uuid) AS `uuid` FROM bhima.credit_note;
 ALTER TABLE reversed_invoices ADD INDEX `uuid` (`uuid`);
 UPDATE invoice SET reversed = 1 WHERE invoice.uuid IN (SELECT uuid FROM reversed_invoices);
 
-/* INVOICE ITEM */
-/*
-  SELECT JUST invoice_item for invoice who exist
-  THIS QUERY TAKE TOO LONG TIME
-*/
+DROP TABLE reversed_invoices;
 
 CREATE TEMPORARY TABLE temp_sale_item AS
   SELECT HUID(sale_uuid) AS sale_uuid, HUID(sale_item.uuid) AS `uuid`, HUID(inventory_uuid) AS inventory_uuid, quantity, inventory_price, transaction_price, debit, credit
 FROM bhima.sale_item;
-
 /* remove the unique key for boosting the insert operation */
 /*!40000 ALTER TABLE `invoice_item` DISABLE KEYS */;
 
@@ -560,36 +676,13 @@ FROM bhima.sale_item;
 ALTER TABLE invoice_item DROP KEY `invoice_item_1`;
 INSERT INTO invoice_item (invoice_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit)
   SELECT sale_uuid, `uuid`, inventory_uuid, quantity, inventory_price, transaction_price, debit, credit FROM temp_sale_item;
-/*!40000 ALTER TABLE `invoice_item` ENABLE KEYS */;
-
-/* POSTING JOURNAL*/
-/*
-  NOTE: CONVERT DOC_NUM TO RECORD_UUID
-*/
-INSERT INTO posting_journal (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
-  SELECT HUID(uuid), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
-  FROM bhima.posting_journal;
-
--- TODO - deal with this in a better way
--- account for data corruption (modifies HBB's dataset!)
-UPDATE bhima.general_ledger SET deb_cred_uuid = NULL WHERE LEFT(deb_cred_uuid, 1) = '"';
-
-/* GENERAL LEDGER */
-/*
-  HBB4229 HAS AS INV_PO_ID PCE29850 WHICH CANNOT BE CONVERTED BY HUID
-  SO WE CONVERT PCE29850 TO 36 CHARS BEFORE PASSING IT TO HUID
-  WE WILL USE 8d344ed2-5db0-11e8-8061-54e1ad7439c7 AS UUID
-*/
-INSERT INTO general_ledger (uuid, project_id, fiscal_year_id, period_id, trans_id, trans_date, record_uuid, description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, entity_uuid, reference_uuid, comment, transaction_type_id, user_id, cc_id, pc_id, created_at, updated_at)
-  SELECT HUID(`uuid`), project_id, fiscal_year_id, period_id, trans_id, TIMESTAMP(trans_date), HUID(UUID()), description, account_id, debit, credit, debit_equiv, credit_equiv, currency_id, IF(LENGTH(deb_cred_uuid) = 36, HUID(deb_cred_uuid), NULL), NULL, comment, origin_id, user_id, cc_id, pc_id, TIMESTAMP(trans_date), CURRENT_TIMESTAMP()
-  FROM bhima.general_ledger;
 
 UPDATE general_ledger gl JOIN sale_record_map srm ON gl.trans_id = srm.trans_id SET gl.record_uuid = srm.uuid;
 UPDATE posting_journal pj JOIN sale_record_map srm ON pj.trans_id = srm.trans_id SET pj.record_uuid = srm.uuid;
 
-/* PERIOD TOTAL */
-INSERT INTO period_total (enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked)
-SELECT enterprise_id, fiscal_year_id, period_id, account_id, credit, debit, locked FROM bhima.period_total;
+DROP TABLE sale_record_map;
+
+/*!40000 ALTER TABLE `invoice_item` ENABLE KEYS */;
 
 /* PATIENT */
 /*
@@ -615,6 +708,7 @@ CREATE TEMPORARY TABLE patient_hospital_no_dupes AS
   SELECT hospital_no, max(uuid) AS uuid FROM patient_migration GROUP BY hospital_no HAVING COUNT(hospital_no) > 1;
 
 DELETE patient_migration FROM patient_migration INNER JOIN patient_hospital_no_dupes ph ON patient_migration.hospital_no = ph.hospital_no WHERE patient_migration.uuid <> ph.uuid;
+DROP TABLE patient_hospital_no_dupes;
 
 -- 82 repeated patient references
 CREATE TEMPORARY TABLE patient_reference_dupes AS
@@ -625,6 +719,7 @@ UPDATE patient_reference_dupes SET n = (@m := @m + 1);
 
 -- choose one project at random to shift up.  We will use HBB
 UPDATE patient_migration pm JOIN patient_reference_dupes pd ON pm.uuid = pd.uuid SET pm.reference = pd.n;
+DROP TABLE patient_reference_dupes;
 
 /*!40000 ALTER TABLE `patient` DISABLE KEYS */;
 INSERT INTO patient (
@@ -652,80 +747,6 @@ INSERT INTO cash_box (id, label, project_id, is_auxiliary)
 INSERT INTO cash_box_account_currency (id, currency_id, cash_box_id, account_id, transfer_account_id)
   SELECT id, currency_id, cash_box_id, account_id, virement_account_id FROM bhima.cash_box_account_currency;
 
--- filter for the cash table
-
-/* CASH */
-/*
-  c54a8769-3e4f-4899-bc43-ef896d3919b3 is a deb_cred_uuid with type D which doesn't exist in the debitor table in 1.x
-  with as cash uuid 524475fb-9762-4051-960c-e5796a14d300
-*/
-/* TEMPORARY FOR JOURNAL AND GENERAL LEDGER */
-/*!40000 ALTER TABLE `bhima`.`posting_journal` DISABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` DISABLE KEYS */;
-CREATE TEMPORARY TABLE combined_ledger AS SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM (
-  SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM bhima.posting_journal
-  UNION ALL
-  SELECT `uuid`, trans_id, account_id, debit, credit, deb_cred_uuid, inv_po_id, origin_id FROM bhima.general_ledger
-) as combined;
-/*!40000 ALTER TABLE `bhima`.`posting_journal` ENABLE KEYS */;
-/*!40000 ALTER TABLE `bhima`.`general_ledger` ENABLE KEYS */;
-
-/* INDEX IN COMBINED */
-ALTER TABLE combined_ledger ADD INDEX `inv_po_id` (`inv_po_id`);
-
--- create a table we can manipulate
-CREATE TEMPORARY TABLE migrate_primary_cash_item AS SELECT * FROM bhima.primary_cash_item;
-ALTER TABLE migrate_primary_cash_item ADD INDEX `document_uuid` (`document_uuid`);
-
--- maps pci uuids onto transactions and prepares vouchers
-CREATE TEMPORARY TABLE pci_ledger AS
-  SELECT HUID(pc.uuid) uuid, MAX(l.trans_id) AS trans_id, MAX(pc.reference) reference, MAX(pc.cost) amount,
-    MAX(pc.currency_id) currency_id, MAX(pc.date) `date`, MAX(pc.project_id) project_id, MAX(pc.description) description,
-    MAX(pc.user_id) user_id, MAX(l.origin_id) origin_id
-  FROM migrate_primary_cash_item pci
-    JOIN combined_ledger l ON pci.document_uuid = l.inv_po_id
-    JOIN bhima.primary_cash pc ON pci.primary_cash_uuid = pc.uuid
-  GROUP BY pc.uuid;
-
-/*
- NOTE: after this operation, we are still missing ~675 vouchers.
-
-There are all made by user 18, thankfully.  We can use this to pre-filter the
-combined ledger;
-*/
-
-/* VOUCHER */
-INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid)
-  SELECT `uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, date, origin_id, NULL
-  FROM pci_ledger;
-
-/*
-USE INDEXES FOR SPEED GAINS
-Can't index TEXT?  MAKE IT VARCHAR
-*/
-ALTER TABLE combined_ledger MODIFY trans_id VARCHAR(50);
-ALTER TABLE pci_ledger MODIFY trans_id VARCHAR(50);
-ALTER TABLE combined_ledger ADD INDEX `trans_id` (`trans_id`);
-ALTER TABLE pci_ledger ADD INDEX `trans_id` (`trans_id`);
-
-/* VOUCHER ITEM */
-/* GET DATA DIRECTLY FROM POSTING JOURNAL AND GENERAL LEDGER */
-INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
-  SELECT HUID(UUID()), cl.account_id, cl.debit, cl.credit, pci_ledger.uuid, NULL, HUID(deb_cred_uuid)
-  FROM pci_ledger JOIN combined_ledger cl ON pci_ledger.trans_id = cl.trans_id;
-
-DROP TABLE combined_ledger;
-DROP TABLE migrate_primary_cash_item;
-
-ALTER TABLE pci_ledger DROP INDEX `trans_id`;
-ALTER TABLE pci_ledger MODIFY `trans_id` TEXT CHARACTER SET utf8 COLLATE utf8_general_ci;
-
-UPDATE general_ledger gl JOIN pci_ledger l ON gl.trans_id = l.trans_id SET gl.record_uuid = l.uuid;
-UPDATE posting_journal pj JOIN pci_ledger l ON pj.trans_id = l.trans_id SET pj.record_uuid = l.uuid;
-
-DROP TABLE pci_ledger;
-
-
 /*
 Vouchers - Create Reversals for Cash Payments
 
@@ -737,12 +758,12 @@ is to copy the posting journal transactions into vouchers.
 -- this is the 1.x transaction type for cash_discard
 SET @typeCashDiscard = 26;
 CREATE TEMPORARY TABLE cash_discard_migration AS
-  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.general_ledger
-  WHERE origin_id = @typeCashDiscard;
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM general_ledger
+  WHERE transaction_type_id = @typeCashDiscard;
 
 INSERT INTO cash_discard_migration
-  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.posting_journal
-  WHERE origin_id = @typeCashDiscard;
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM posting_journal
+  WHERE transaction_type_id = @typeCashDiscard;
 
 INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id, reference_uuid, edited)
   SELECT HUID(UUID()), MAX(trans_date), MAX(cd.project_id), NULL, MAX(currency_id), MAX(cd.cost), MAX(cdm.description), MAX(user_id), MAX(trans_date), @typeCashDiscard, MAX(HUID(cd.cash_uuid)), 0
@@ -771,6 +792,8 @@ INSERT INTO voucher_trans_map
 UPDATE posting_journal gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vtm.uuid;
 UPDATE general_ledger gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vtm.uuid;
 
+DROP TABLE voucher_map;
+
 /*
 Vouchers - Create Reversals for Invoices (Credit Notes)
 
@@ -780,12 +803,12 @@ select count(sale_uuid) n, sale_uuid FROM credit_note GROUP BY sale_uuid HAVING 
 SET @creditNoteType = 6;
 SET @currencyId = 2;
 CREATE TEMPORARY TABLE credit_note_migration AS
-  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.general_ledger
-  WHERE origin_id = @creditNoteType;
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM general_ledger
+  WHERE transaction_type_id = @creditNoteType;
 
 INSERT INTO credit_note_migration
-  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM bhima.posting_journal
-  WHERE origin_id = @creditNoteType;
+  SELECT project_id, trans_id, trans_date, description, account_id, debit, credit, currency_id, user_id FROM posting_journal
+  WHERE transaction_type_id = @creditNoteType;
 
 CREATE TEMPORARY TABLE credit_note_uuids AS
   SELECT DISTINCT trans_id, HUID(UUID()) AS `uuid` FROM credit_note_migration;
@@ -815,148 +838,16 @@ INSERT IGNORE INTO patient_assignment
   SELECT HUID(`uuid`), HUID(patient_group_uuid), HUID(patient_uuid) FROM bhima.assignation_patient;
 
 
--- deal with unmigrated types
--- import_automatique
-CALL VouchersFromTransactionTypePJ(9);
-CALL VouchersFromTransactionTypeGL(9);
--- distribution
-CALL VouchersFromTransactionTypePJ(12);
-CALL VouchersFromTransactionTypeGL(12);
--- stock loss
-CALL VouchersFromTransactionTypePJ(13);
-CALL VouchersFromTransactionTypeGL(13);
--- payroll
-CALL VouchersFromTransactionTypePJ(14);
-CALL VouchersFromTransactionTypeGL(14);
--- donation
-CALL VouchersFromTransactionTypePJ(15);
-CALL VouchersFromTransactionTypeGL(15);
--- tax_payment
-CALL VouchersFromTransactionTypePJ(16);
-CALL VouchersFromTransactionTypeGL(16);
--- cotisation_engagement
-CALL VouchersFromTransactionTypePJ(17);
-CALL VouchersFromTransactionTypeGL(17);
--- tax_engagement
-CALL VouchersFromTransactionTypePJ(18);
-CALL VouchersFromTransactionTypeGL(18);
--- cotisation_paiement
-CALL VouchersFromTransactionTypePJ(19);
-CALL VouchersFromTransactionTypeGL(19);
--- indirect_purchase
-CALL VouchersFromTransactionTypePJ(21);
-CALL VouchersFromTransactionTypeGL(21);
--- confirm_purchase
-CALL VouchersFromTransactionTypePJ(22);
-CALL VouchersFromTransactionTypeGL(22);
--- salary_advance
-CALL VouchersFromTransactionTypePJ(23);
-CALL VouchersFromTransactionTypeGL(23);
--- employee_invoice
-CALL VouchersFromTransactionTypePJ(24);
-CALL VouchersFromTransactionTypeGL(24);
--- cash_return
-CALL VouchersFromTransactionTypePJ(27);
-CALL VouchersFromTransactionTypeGL(27);
--- reversing_stock
-CALL VouchersFromTransactionTypePJ(28);
-CALL VouchersFromTransactionTypeGL(28);
--- confirmation_integration
-CALL VouchersFromTransactionTypePJ(32);
-CALL VouchersFromTransactionTypeGL(32);
-
--- clean up group_invoice
-DELETE FROM voucher_item WHERE voucher_uuid IN (SELECT uuid FROM voucher WHERE type_id = 33);
-DELETE FROM voucher WHERE type_id = 33;
-CALL VouchersFromTransactionTypePJ(33);
-CALL VouchersFromTransactionTypeGL(33);
-
--- service_return_stock
-CALL VouchersFromTransactionTypePJ(34);
-CALL VouchersFromTransactionTypeGL(34);
-
--- WARNING: cash is last because it takes the longest
--- select project_id, reference, count(reference) n from cash GROUP BY project_id, reference HAVING n > 1;
-CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash ORDER BY bhima.cash.uuid;
-ALTER TABLE cash_migrate ADD INDEX `uuid` (`uuid`);
-
--- we have duplicate references to clean up
-CREATE TEMPORARY TABLE cash_reference_dupes AS
-  SELECT project_id, reference, MIN(uuid) AS uuid, 0 AS 'n' FROM cash_migrate GROUP BY project_id, reference HAVING COUNT(reference) > 1;
-
-SET @c = (SELECT max(reference) FROM cash_migrate);
-UPDATE cash_reference_dupes SET n = (@c := @c + 1);
-
--- choose one project at random to shift up.  We will use HBB
-UPDATE cash_migrate cm JOIN cash_reference_dupes cd ON cm.uuid = cd.uuid SET cm.reference = cd.n;
-
-CREATE TEMPORARY TABLE reversed_cash_payments AS SELECT HUID(cash_uuid) AS `uuid` FROM bhima.cash_discard;
-ALTER TABLE reversed_cash_payments ADD INDEX `uuid` (`uuid`);
-
-INSERT INTO cash (`uuid`, project_id, reference, `date`, debtor_uuid, currency_id, amount, user_id, cashbox_id, description, is_caution, reversed, edited, created_at)
-  SELECT HUID(cm.uuid), cm.project_id, cm.reference, cm.`date`, HUID(cm.deb_cred_uuid), cm.currency_id, cm.cost, cm.user_id, cm.cashbox_id, cm.description, cm.is_caution, 0, 0, CURRENT_TIMESTAMP()
-  FROM cash_migrate cm;
-
-UPDATE cash SET reversed = 1 WHERE cash.uuid IN (SELECT uuid from reversed_cash_payments);
-
-/* CASH ITEM */
-/*
-  skipped cash 524475fb-9762-4051-960c-e5796a14d30
-*/
-INSERT INTO cash_item (`uuid`, cash_uuid, amount, invoice_uuid)
-  SELECT HUID(`uuid`), HUID(cash_uuid), allocated_cost, HUID(invoice_uuid) FROM bhima.cash_item;
-
-CREATE TEMPORARY TABLE `cash_record_map` AS SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.posting_journal p ON c.uuid = p.inv_po_id;
-INSERT INTO `cash_record_map` SELECT HUID(c.uuid) AS uuid, p.trans_id FROM bhima.cash c JOIN bhima.general_ledger p ON c.uuid = p.inv_po_id;
-
-UPDATE posting_journal pj JOIN cash_record_map crm ON pj.trans_id = crm.trans_id SET pj.record_uuid = crm.uuid;
-UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id SET gl.record_uuid = crm.uuid;
-
-DROP TABLE cash_reference_dupes;
-DROP TABLE cash_migrate;
-
-/*
-Linking - Journal/General Ledger
-
-Update Journal + GL make cash payments reference invoices.
-
-*/
-CREATE TEMPORARY TABLE invoice_links AS
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-INSERT INTO invoice_links
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-
-DROP TABLE invoice_links;
-
-COMMIT;
-
-/* ENABLE AUTOCOMMIT AFTER THE SCRIPT */
-SET autocommit=1;
-SET foreign_key_checks=1;
-SET unique_checks=1;
-
 /* RECOMPUTE */
 Call ComputeAccountClass();
 Call zRecomputeEntityMap();
 Call zRecomputeDocumentMap();
 Call zRecalculatePeriodTotals();
 
-DROP PROCEDURE MergeSector;
-DROP PROCEDURE VouchersFromTransactionTypeGL;
-DROP PROCEDURE VouchersFromTransactionTypePJ;
+-- deal with unmigrated types
+COMMIT;
 
--- compute period 0 for the following fiscal years
-CALL ComputePeriodZero(2015);
-CALL ComputePeriodZero(2016);
-CALL ComputePeriodZero(2017);
-CALL ComputePeriodZero(2018);
+/* ENABLE AUTOCOMMIT AFTER THE SCRIPT */
+SET autocommit=1;
+SET foreign_key_checks=1;
+SET unique_checks=1;
