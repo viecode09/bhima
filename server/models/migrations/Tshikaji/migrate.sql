@@ -78,6 +78,70 @@ CREATE PROCEDURE ComputePeriodZero(
     GROUP BY account_id;
 END $$
 
+
+-- NOTE: this uses 2.x's tables, not 1.x's
+CREATE PROCEDURE VouchersFromTransactionTypeGL(
+  IN transactionTypeId INT
+) BEGIN
+  CREATE TEMPORARY TABLE transactions AS
+    SELECT * FROM general_ledger WHERE transaction_type_id = transactionTypeId;
+
+  CREATE TEMPORARY TABLE mapping AS
+    SELECT DISTINCT trans_id, HUID(UUID()) record_uuid FROM general_ledger WHERE transaction_type_id = transactionTypeId;
+
+  CREATE TEMPORARY TABLE stage_voucher AS
+    SELECT m.record_uuid, MAX(trans_date) date, MAX(project_id) project_id, NULL AS reference, MAX(currency_id) currency_id,
+      SUM(debit) amount, MAX(description) description, MAX(user_id) user_id, MAX(trans_date) created_at, transactionTypeId AS type_id
+      FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id
+      GROUP BY t.trans_id;
+
+  INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id)
+    SELECT record_uuid, date, project_id, reference, currency_id, amount, description, user_id, created_at, type_id
+    FROM stage_voucher;
+
+
+  INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+    SELECT HUID(UUID()), account_id, debit, credit, m.record_uuid, reference_uuid, entity_uuid
+    FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id;
+
+  UPDATE general_ledger gl JOIN mapping m ON gl.trans_id = m.trans_id SET gl.record_uuid = m.record_uuid WHERE transaction_type_id = transactionTypeId;
+
+  DROP TABLE transactions;
+  DROP TABLE mapping;
+  DROP TABLE stage_voucher;
+END $$
+
+CREATE PROCEDURE VouchersFromTransactionTypePJ(
+  IN transactionTypeId INT
+) BEGIN
+  CREATE TEMPORARY TABLE transactions AS
+    SELECT * FROM posting_journal WHERE transaction_type_id = transactionTypeId;
+
+  CREATE TEMPORARY TABLE mapping AS
+    SELECT DISTINCT trans_id, HUID(UUID()) record_uuid FROM posting_journal WHERE transaction_type_id = transactionTypeId;
+
+  CREATE TEMPORARY TABLE stage_voucher AS
+    SELECT m.record_uuid, MAX(trans_date) date, MAX(project_id) project_id, NULL AS reference, MAX(currency_id) currency_id,
+      SUM(debit) amount, MAX(description) description, MAX(user_id) user_id, MAX(trans_date) created_at, transactionTypeId AS type_id
+      FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id
+      GROUP BY t.trans_id;
+
+  INSERT INTO voucher (`uuid`, `date`, project_id, reference, currency_id, amount, description, user_id, created_at, type_id)
+    SELECT record_uuid, date, project_id, reference, currency_id, amount, description, user_id, created_at, type_id
+    FROM stage_voucher;
+
+
+  INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, document_uuid, entity_uuid)
+    SELECT HUID(UUID()), account_id, debit, credit, m.record_uuid, reference_uuid, entity_uuid
+    FROM transactions t JOIN mapping m ON t.trans_id = m.trans_id;
+
+  UPDATE posting_journal gl JOIN mapping m ON gl.trans_id = m.trans_id SET gl.record_uuid = m.record_uuid WHERE transaction_type_id = transactionTypeId;
+
+  DROP TABLE transactions;
+  DROP TABLE mapping;
+  DROP TABLE stage_voucher;
+END $$
+
 DELIMITER ;
 
 /* ALTER TABLE bhima.posting_journal ADD INDEX `inv_po_id` (`inv_po_id`); */
@@ -653,6 +717,7 @@ INSERT INTO voucher_item (`uuid`, account_id, debit, credit, voucher_uuid, docum
 DROP TABLE combined_ledger;
 DROP TABLE migrate_primary_cash_item;
 
+ALTER TABLE pci_ledger DROP INDEX `trans_id`;
 ALTER TABLE pci_ledger MODIFY `trans_id` TEXT CHARACTER SET utf8 COLLATE utf8_general_ci;
 
 UPDATE general_ledger gl JOIN pci_ledger l ON gl.trans_id = l.trans_id SET gl.record_uuid = l.uuid;
@@ -660,28 +725,6 @@ UPDATE posting_journal pj JOIN pci_ledger l ON pj.trans_id = l.trans_id SET pj.r
 
 DROP TABLE pci_ledger;
 
-/*
-Linking - Journal/General Ledger
-
-Update Journal + GL make cash payments reference invoices.
-
-*/
-CREATE TEMPORARY TABLE invoice_links AS
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-INSERT INTO invoice_links
-  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
-    ci.cash_uuid = gl.record_uuid AND
-    ci.amount = gl.credit AND
-    gl.entity_uuid IS NOT NULL;
-
-UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
-
-DROP TABLE invoice_links;
 
 /*
 Vouchers - Create Reversals for Cash Payments
@@ -725,8 +768,8 @@ INSERT INTO voucher_trans_map
   general_ledger gl JOIN voucher_map vm ON gl.description = vm.description
   GROUP BY gl.trans_id;
 
-UPDATE posting_journal gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vm.uuid;
-UPDATE general_ledger gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vm.uuid;
+UPDATE posting_journal gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vtm.uuid;
+UPDATE general_ledger gl JOIN voucher_trans_map vtm ON gl.trans_id = vtm.trans_id SET gl.record_uuid = vtm.uuid;
 
 /*
 Vouchers - Create Reversals for Invoices (Credit Notes)
@@ -771,6 +814,67 @@ INSERT INTO patient_group
 INSERT IGNORE INTO patient_assignment
   SELECT HUID(`uuid`), HUID(patient_group_uuid), HUID(patient_uuid) FROM bhima.assignation_patient;
 
+
+-- deal with unmigrated types
+-- import_automatique
+CALL VouchersFromTransactionTypePJ(9);
+CALL VouchersFromTransactionTypeGL(9);
+-- distribution
+CALL VouchersFromTransactionTypePJ(12);
+CALL VouchersFromTransactionTypeGL(12);
+-- stock loss
+CALL VouchersFromTransactionTypePJ(13);
+CALL VouchersFromTransactionTypeGL(13);
+-- payroll
+CALL VouchersFromTransactionTypePJ(14);
+CALL VouchersFromTransactionTypeGL(14);
+-- donation
+CALL VouchersFromTransactionTypePJ(15);
+CALL VouchersFromTransactionTypeGL(15);
+-- tax_payment
+CALL VouchersFromTransactionTypePJ(16);
+CALL VouchersFromTransactionTypeGL(16);
+-- cotisation_engagement
+CALL VouchersFromTransactionTypePJ(17);
+CALL VouchersFromTransactionTypeGL(17);
+-- tax_engagement
+CALL VouchersFromTransactionTypePJ(18);
+CALL VouchersFromTransactionTypeGL(18);
+-- cotisation_paiement
+CALL VouchersFromTransactionTypePJ(19);
+CALL VouchersFromTransactionTypeGL(19);
+-- indirect_purchase
+CALL VouchersFromTransactionTypePJ(21);
+CALL VouchersFromTransactionTypeGL(21);
+-- confirm_purchase
+CALL VouchersFromTransactionTypePJ(22);
+CALL VouchersFromTransactionTypeGL(22);
+-- salary_advance
+CALL VouchersFromTransactionTypePJ(23);
+CALL VouchersFromTransactionTypeGL(23);
+-- employee_invoice
+CALL VouchersFromTransactionTypePJ(24);
+CALL VouchersFromTransactionTypeGL(24);
+-- cash_return
+CALL VouchersFromTransactionTypePJ(27);
+CALL VouchersFromTransactionTypeGL(27);
+-- reversing_stock
+CALL VouchersFromTransactionTypePJ(28);
+CALL VouchersFromTransactionTypeGL(28);
+-- confirmation_integration
+CALL VouchersFromTransactionTypePJ(32);
+CALL VouchersFromTransactionTypeGL(32);
+
+-- clean up group_invoice
+DELETE FROM voucher_item WHERE voucher_uuid IN (SELECT uuid FROM voucher WHERE type_id = 33);
+DELETE FROM voucher WHERE type_id = 33;
+CALL VouchersFromTransactionTypePJ(33);
+CALL VouchersFromTransactionTypeGL(33);
+
+-- service_return_stock
+CALL VouchersFromTransactionTypePJ(34);
+CALL VouchersFromTransactionTypeGL(34);
+
 -- WARNING: cash is last because it takes the longest
 -- select project_id, reference, count(reference) n from cash GROUP BY project_id, reference HAVING n > 1;
 CREATE TEMPORARY TABLE cash_migrate AS SELECT * FROM bhima.cash ORDER BY bhima.cash.uuid;
@@ -811,6 +915,28 @@ UPDATE general_ledger gl JOIN cash_record_map crm ON gl.trans_id = crm.trans_id 
 DROP TABLE cash_reference_dupes;
 DROP TABLE cash_migrate;
 
+/*
+Linking - Journal/General Ledger
+
+Update Journal + GL make cash payments reference invoices.
+
+*/
+CREATE TEMPORARY TABLE invoice_links AS
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN general_ledger gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+INSERT INTO invoice_links
+  SELECT gl.uuid, ci.invoice_uuid FROM cash_item ci JOIN posting_journal gl ON
+    ci.cash_uuid = gl.record_uuid AND
+    ci.amount = gl.credit AND
+    gl.entity_uuid IS NOT NULL;
+
+UPDATE general_ledger gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+UPDATE posting_journal gl JOIN invoice_links iv ON gl.uuid = iv.uuid SET gl.reference_uuid = iv.invoice_uuid;
+
+DROP TABLE invoice_links;
 
 COMMIT;
 
@@ -826,6 +952,8 @@ Call zRecomputeDocumentMap();
 Call zRecalculatePeriodTotals();
 
 DROP PROCEDURE MergeSector;
+DROP PROCEDURE VouchersFromTransactionTypeGL;
+DROP PROCEDURE VouchersFromTransactionTypePJ;
 
 -- compute period 0 for the following fiscal years
 CALL ComputePeriodZero(2015);

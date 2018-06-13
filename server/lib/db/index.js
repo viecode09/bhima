@@ -22,7 +22,6 @@ const debug = require('debug')('db');
  *
  * @requires q
  * @requires mysql
- * @requires winston
  * @requires Transaction
  */
 class DatabaseConnector {
