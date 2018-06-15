@@ -23,7 +23,7 @@ echo "[ build ] database schema"
 mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/schema.sql &> /dev/null
 
 echo "[ build ] triggers"
-mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/triggers.sql &> /dev/null
+# mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/triggers.sql &> /dev/null
 
 echo "[ build ] functions"
 mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/functions.sql &> /dev/null
@@ -34,6 +34,6 @@ mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/admin.sql &> /dev/null
 
 echo "[ build ] default data"
 mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/icd10.sql &> /dev/null
-mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/bhima.sql &> /dev/null
+# mysql -u $DB_USER -p$DB_PASS $DB_NAME < server/models/bhima.sql &> /dev/null
 
 echo "[ /build ]"

@@ -224,16 +224,6 @@ INSERT INTO `report` (`id`, `report_key`, `title_key`) VALUES
   (19, 'patientStanding', 'REPORT.PATIENT_STANDING.TITLE');
 
 
-/*
-CREATE TRIGGER patient_reference BEFORE INSERT ON patient
-FOR EACH ROW
-  SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(patient.reference) + 1, 1)) FROM patient WHERE patient.project_id = new.project_id);$$
-
-CREATE TRIGGER invoice_reference BEFORE INSERT ON invoice
-FOR EACH ROW
-  SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(invoice.reference) + 1, 1)) FROM invoice WHERE invoice.project_id = new.project_id);$$
-*/
-
 CREATE TRIGGER voucher_before_insert BEFORE INSERT ON voucher
 FOR EACH ROW
   SET NEW.reference = (SELECT IF(NEW.reference, NEW.reference, IFNULL(MAX(voucher.reference) + 1, 1)) FROM voucher WHERE voucher.project_id = new.project_id);$$
