@@ -740,8 +740,8 @@ SET @third_voucher = HUID('3688e9ce-85ea-4b5c-9144-688177edcb63');
 
 INSERT INTO `voucher` (uuid, `date`,  project_id, currency_id, amount, description, user_id, type_id) VALUES
   (@first_voucher, CURRENT_TIMESTAMP, 1,  2, 100, 'Sample voucher data one', 1, 1),
-  (@second_voucher, CURRENT_TIMESTAMP, 2, 2, 200, 'Sample voucher data two', 1, NULL),
-  (@third_voucher, CURRENT_TIMESTAMP, 3, 1, 300, 'Sample voucher data three', 1, NULL);
+  (@second_voucher, CURRENT_TIMESTAMP, 2, 2, 200, 'Sample voucher data two', 1, 9),
+  (@third_voucher, CURRENT_TIMESTAMP, 3, 1, 300, 'Sample voucher data three', 1, 9);
 
 -- voucher items sample data
 INSERT INTO `voucher_item` VALUES
@@ -885,9 +885,16 @@ INSERT INTO `taxe_ipr_configuration` (`rate`, `tranche_annuelle_debut`, `tranche
 -- Configuration Accounting Payroll
 INSERT INTO `config_accounting` (`label`, `account_id`) VALUES ('Configuration Compte Rémunération', 220);
 
+-- Configuration Employee Payroll
+INSERT INTO `config_employee` (`id`, `label`) VALUES ('1', 'Configuration des Employés');
+
+INSERT INTO `config_employee_item` (`id`, `config_employee_id`, `employee_uuid`) VALUES 
+  (1, 1, 0x75E0969465F245A1A8A28B025003D793),
+  (2, 1, 0x75E69409562FA2A845A13D7938B02500);
+
 -- Payroll Configuration Period
-INSERT INTO `payroll_configuration` (`id`, `label`, `dateFrom`, `dateTo`, `config_rubric_id`, `config_accounting_id`, `config_weekend_id`, `config_ipr_id`) VALUES
-(1, 'Février 2018', '2018-02-01', '2018-02-28', 1, 1, 1, 1);
+INSERT INTO `payroll_configuration` (`id`, `label`, `dateFrom`, `dateTo`, `config_rubric_id`, `config_accounting_id`, `config_weekend_id`, `config_employee_id`, `config_ipr_id`) VALUES
+(1, 'Février 2018', '2018-02-01', '2018-02-28', 1, 1, 1, 1, 1);
 
 SET @paymentUuid = HUID('2a3f17b0ae3242bb9333a760825fd257');
 SET @employeeUuid = HUID('75e0969465f245a1a8a28b025003d793');
