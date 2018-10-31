@@ -4,8 +4,7 @@ angular.module('bhima.controllers')
 // dependencies injection
 ClosingFYModalCtrl.$inject = [
   'NotifyService', 'FiscalService', 'ModalService', 'SessionService',
-  '$uibModalInstance', 'data', 'uiGridConstants',
-  'bhConstants', 'TreeService',
+  '$uibModalInstance', 'data', 'uiGridConstants', 'bhConstants', 'TreeService',
 ];
 
 // The closing fiscal year controller
@@ -26,7 +25,6 @@ function ClosingFYModalCtrl(Notify, Fiscal, Modal, Session, Instance, Data, uiGr
     bhConstants.accounts.EXPENSE,
     bhConstants.accounts.TITLE,
   ];
-
 
   function customAggregationFn(columnDefs, column) {
     if (vm.AccountTree) {
@@ -145,6 +143,8 @@ function ClosingFYModalCtrl(Notify, Fiscal, Modal, Session, Instance, Data, uiGr
 
 
   function startup() {
+    vm.loading = true;
+
     Fiscal.read(fiscalYearId)
       .then(fiscal => {
         vm.fiscal = fiscal;
@@ -181,7 +181,10 @@ function ClosingFYModalCtrl(Notify, Fiscal, Modal, Session, Instance, Data, uiGr
         // compute the totals
         computeGridTotals();
       })
-      .catch(Notify.handleError);
+      .catch(Notify.handleError)
+      .finally(() => {
+        vm.loading = false;
+      });
   }
 
   function stepForward(form) {
@@ -245,9 +248,7 @@ function ClosingFYModalCtrl(Notify, Fiscal, Modal, Session, Instance, Data, uiGr
     const accountTypeFilter = node => !acceptedAccountTypes.includes(node.type_id);
     const emptyTitleAccountFilter = node => (node.isTitleAccount && node.children.length === 0);
 
-    const pruneFn = node =>
-      emptyTitleAccountFilter(node) ||
-      accountTypeFilter(node);
+    const pruneFn = node => emptyTitleAccountFilter(node) || accountTypeFilter(node);
 
     let settled = tree.prune(pruneFn);
     while (settled > 0) {
